@@ -3,209 +3,483 @@ import json
 import asyncio
 import random
 import threading
+import time
+from datetime import datetime
 from pyrogram import Client
 from pyrogram.errors import (
-    PhoneNumberInvalid, FloodWait, PhoneCodeInvalid, SessionPasswordNeeded
+    PhoneNumberInvalid, FloodWait, PhoneCodeInvalid, SessionPasswordNeeded,
+    AuthKeyUnregistered, UserDeactivated, RPCError
 )
-# 适配 python-telegram-bot 12.8 稳定版
-import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, CallbackQueryHandler,
     ConversationHandler, Filters, CallbackContext
 )
 
-# ==================== 你的配置（只改这里） ====================
+# ==================== 你的配置 ====================
 API_ID = 38596687
 API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
 BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
 ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
-# ==============================================================
+# ==================================================
 
-# 消除 Pyrogram 警告（不影响功能，仅清理日志）
+# 环境配置（消除警告+禁用控制台交互）
 os.environ["PYROGRAM_NO_TGCRYPTO"] = "1"
+os.environ["PYROGRAM_DISABLE_TELETHON"] = "1"
 
+# 对话状态
 PHONE, CODE, PASS = range(3)
-ACCOUNTS = "accounts.json"
-SESSIONS = "sessions"
-os.makedirs(SESSIONS, exist_ok=True)
+# 文件路径
+ACCOUNTS_FILE = "accounts.json"
+SESSIONS_DIR = "sessions"
+LOG_FILE = "redpacket.log"
 
-# 加载/保存账号
-def load_accounts():
-    if os.path.exists(ACCOUNTS):
-        with open(ACCOUNTS, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+# 初始化目录
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-def save_accounts(data):
-    with open(ACCOUNTS, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-
-accounts = load_accounts()
-clients = {}
-# 创建全局异步循环
+# 全局变量
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
+accounts = {}  # 账号信息：{phone: {status, stats, last_active}}
+clients = {}   # 客户端实例：{phone: Client}
+tasks = {}     # 监听任务：{phone: asyncio.Task}
 
-# 发送验证码（稳定版）
-async def send_verification_code(phone):
+# ==================== 工具函数 ====================
+def clean_session(phone):
+    """清理无效会话文件"""
+    session_prefix = f"{SESSIONS_DIR}/{phone.replace('+', '')}"
+    for ext in [".session", ".session-journal"]:
+        if os.path.exists(session_prefix + ext):
+            os.remove(session_prefix + ext)
+
+def load_accounts():
+    """加载账号数据"""
+    global accounts
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+                accounts = json.load(f)
+        except:
+            accounts = {}
+    else:
+        accounts = {}
+    # 初始化统计数据
+    for phone in accounts:
+        if "stats" not in accounts[phone]:
+            accounts[phone]["stats"] = {
+                "total_attempts": 0,
+                "successful_clicks": 0,
+                "success_rate": 0.0
+            }
+        if "last_active" not in accounts[phone]:
+            accounts[phone]["last_active"] = datetime.now().isoformat()
+
+def save_accounts():
+    """保存账号数据"""
     try:
-        client = Client(f"{SESSIONS}/{phone}", API_ID, API_HASH)
+        with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(accounts, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        log(f"保存账号失败：{e}")
+
+def log(content):
+    """日志记录"""
+    log_str = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {content}"
+    print(log_str)
+    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+        f.write(log_str + "\n")
+
+def update_stats(phone, success):
+    """更新抢红包统计"""
+    if phone in accounts:
+        accounts[phone]["stats"]["total_attempts"] += 1
+        if success:
+            accounts[phone]["stats"]["successful_clicks"] += 1
+        # 计算成功率
+        total = accounts[phone]["stats"]["total_attempts"]
+        success = accounts[phone]["stats"]["successful_clicks"]
+        accounts[phone]["stats"]["success_rate"] = round(success/total*100, 2) if total > 0 else 0.0
+        accounts[phone]["last_active"] = datetime.now().isoformat()
+        save_accounts()
+
+# ==================== 核心功能 ====================
+async def send_verification_code(phone):
+    """发送验证码（防重复）"""
+    clean_session(phone)
+    try:
+        client = Client(
+            f"{SESSIONS_DIR}/{phone.replace('+', '')}",
+            API_ID, API_HASH,
+            in_memory=True  # 内存模式，避免文件读写错误
+        )
         await client.connect()
-        await client.send_code(phone)
+        await client.send_code(
+            phone,
+            force_sms=True,
+            allow_flashcall=False
+        )
         await client.disconnect()
-        return True, "✅ 验证码已发送（查收 Telegram 消息）"
+        log(f"验证码已发送到 {phone}")
+        return True, "✅ 验证码已发送（查收 Telegram 短信/消息）"
     except PhoneNumberInvalid:
         return False, "❌ 手机号无效（格式：+8613800000000）"
     except FloodWait as e:
         return False, f"❌ 操作频繁，请等待 {e.value} 秒后重试"
     except Exception as e:
+        log(f"发送验证码失败 {phone}：{e}")
         return False, f"❌ 发送失败：{str(e)[:30]}"
 
-# 登录账号
 async def login_account(phone, code, password=None):
+    """登录账号（修复 EOF 错误）"""
     try:
         client = Client(
-            f"{SESSIONS}/{phone}",
+            f"{SESSIONS_DIR}/{phone.replace('+', '')}",
             API_ID, API_HASH,
             phone_number=phone,
             phone_code=code,
-            password=password
+            password=password,
+            in_memory=True,
+            takeout=False
         )
         await client.start()
+        # 获取账号信息
+        me = await client.get_me()
+        # 保存客户端实例
         clients[phone] = client
-        accounts[phone] = {"status": "active"}
-        save_accounts(accounts)
-        return True, "✅ 登录成功！已开始监听红包"
+        # 更新账号状态
+        accounts[phone] = {
+            "status": "active",
+            "user_id": me.id,
+            "username": me.username or "无",
+            "first_name": me.first_name or "无",
+            "stats": accounts.get(phone, {}).get("stats", {"total_attempts": 0, "successful_clicks": 0, "success_rate": 0.0}),
+            "last_active": datetime.now().isoformat(),
+            "login_time": datetime.now().isoformat()
+        }
+        save_accounts()
+        log(f"账号登录成功 {phone}（{me.first_name}）")
+        return True, f"✅ 登录成功！账号：{me.first_name}"
     except PhoneCodeInvalid:
-        return False, "❌ 验证码错误，请重新输入"
+        clean_session(phone)
+        return False, "❌ 验证码错误，请重新获取验证码"
     except SessionPasswordNeeded:
         return False, "need_password"
+    except (AuthKeyUnregistered, UserDeactivated):
+        clean_session(phone)
+        return False, "❌ 账号未注册/已封禁"
+    except EOFError:
+        clean_session(phone)
+        return False, "❌ 登录失败：请重新获取验证码"
     except Exception as e:
+        clean_session(phone)
+        log(f"登录失败 {phone}：{e}")
         return False, f"❌ 登录失败：{str(e)[:30]}"
 
-# 自动抢红包
-async def watch_redpacket(client):
+async def watch_redpacket(phone):
+    """监听并抢红包"""
+    client = clients.get(phone)
+    if not client:
+        return
+
     @client.on_message()
     async def handler(c, msg):
+        # 只监听指定群聊
         if msg.chat.id != GROUP_ID or not msg.reply_markup:
             return
+        
         # 检测红包按钮
+        redpacket_btn = None
         for row in msg.reply_markup.inline_keyboard:
             for btn in row:
-                if any(k in btn.text for k in ["领取", "红包", "开", "点我", "拆开"]):
-                    await asyncio.sleep(random.uniform(0.2, 0.6))
-                    await c.request_callback_answer(msg.chat.id, msg.id, btn.callback_data)
-                    return
+                if any(k in btn.text for k in ["领取", "红包", "开", "点我", "拆开", "claim", "open"]):
+                    redpacket_btn = btn
+                    break
+            if redpacket_btn:
+                break
+        
+        if redpacket_btn:
+            log(f"{phone} 检测到红包，尝试领取...")
+            update_stats(phone, False)
+            try:
+                # 随机延迟，模拟人工操作
+                await asyncio.sleep(random.uniform(0.2, 0.8))
+                # 点击红包按钮
+                await c.request_callback_answer(
+                    chat_id=msg.chat.id,
+                    message_id=msg.id,
+                    callback_data=redpacket_btn.callback_data
+                )
+                update_stats(phone, True)
+                log(f"{phone} 红包领取成功！")
+            except Exception as e:
+                log(f"{phone} 红包领取失败：{e}")
+
+    # 保持监听
     while True:
+        if phone not in clients:
+            break
         await asyncio.sleep(1)
 
-# 机器人命令 - 启动
+async def auto_reconnect(phone):
+    """账号掉线自动重连"""
+    while True:
+        if phone in clients and clients[phone].is_connected:
+            await asyncio.sleep(60)
+            continue
+        
+        log(f"{phone} 账号掉线，尝试重连...")
+        # 清理旧会话
+        clean_session(phone)
+        # 重新登录
+        try:
+            client = Client(
+                f"{SESSIONS_DIR}/{phone.replace('+', '')}",
+                API_ID, API_HASH,
+                phone_number=phone,
+                in_memory=True
+            )
+            await client.start()
+            clients[phone] = client
+            accounts[phone]["status"] = "active"
+            save_accounts()
+            log(f"{phone} 重连成功")
+            # 重启监听
+            tasks[phone] = loop.create_task(watch_redpacket(phone))
+        except:
+            accounts[phone]["status"] = "offline"
+            save_accounts()
+            log(f"{phone} 重连失败，5分钟后重试")
+            await asyncio.sleep(300)
+
+def remove_account(phone):
+    """删除账号"""
+    if phone in clients:
+        loop.run_until_complete(clients[phone].stop())
+        del clients[phone]
+    if phone in tasks:
+        tasks[phone].cancel()
+        del tasks[phone]
+    if phone in accounts:
+        del accounts[phone]
+    clean_session(phone)
+    save_accounts()
+    log(f"账号已删除 {phone}")
+
+# ==================== 机器人命令 ====================
 def start(update: Update, context: CallbackContext):
+    """启动命令"""
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ 无操作权限")
         return
-    # 发送主菜单
+    
+    # 主菜单
+    keyboard = [
+        [InlineKeyboardButton("➕ 添加账号", callback_data="add_account")],
+        [InlineKeyboardButton("📋 账号列表", callback_data="list_accounts")],
+        [InlineKeyboardButton("📊 抢包统计", callback_data="show_stats")],
+        [InlineKeyboardButton("🗑️ 清理日志", callback_data="clear_log")]
+    ]
     update.message.reply_text(
-        "🤖 红包机器人（Render 稳定版）\n\n操作说明：\n1. 点击「添加账号」\n2. 输入+86开头手机号\n3. 输入验证码完成登录",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ 添加账号", callback_data="add_account")]
-        ])
+        f"🤖 红包机器人（Render 稳定版）\n"
+        f"📅 当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"📱 在线账号：{len([p for p in accounts if accounts[p]['status'] == 'active'])}/{len(accounts)}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# 按钮回调 - 添加账号
 def button_callback(update: Update, context: CallbackContext):
+    """按钮回调"""
     query = update.callback_query
-    query.answer()  # 必须调用，否则 Telegram 会卡住
+    query.answer()
+    
     if query.data == "add_account":
         query.edit_message_text("📱 请输入手机号（格式：+8613800000000）")
         return PHONE
+    
+    elif query.data == "list_accounts":
+        """账号列表"""
+        if not accounts:
+            query.edit_message_text("📭 暂无账号")
+            return
+        
+        text = "📋 账号列表：\n\n"
+        for idx, (phone, info) in enumerate(accounts.items(), 1):
+            status = "🟢 在线" if info["status"] == "active" else "🔴 离线"
+            text += f"{idx}. {phone} - {status}\n"
+            text += f"   昵称：{info['first_name']} | 最后活跃：{info['last_active'][:19]}\n\n"
+        
+        # 添加操作按钮
+        keyboard = [
+            [InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")],
+            [InlineKeyboardButton("🗑️ 删除账号", callback_data="delete_account")]
+        ]
+        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif query.data == "show_stats":
+        """抢包统计"""
+        if not accounts:
+            query.edit_message_text("📭 暂无统计数据")
+            return
+        
+        text = "📊 抢红包统计：\n\n"
+        total_attempts = 0
+        total_success = 0
+        
+        for phone, info in accounts.items():
+            stats = info["stats"]
+            text += f"📱 {phone}：\n"
+            text += f"   总尝试：{stats['total_attempts']} | 成功：{stats['successful_clicks']}\n"
+            text += f"   成功率：{stats['success_rate']}%\n\n"
+            total_attempts += stats["total_attempts"]
+            total_success += stats["successful_clicks"]
+        
+        total_rate = round(total_success/total_attempts*100, 2) if total_attempts > 0 else 0.0
+        text += f"📈 总计：\n"
+        text += f"   总尝试：{total_attempts} | 成功：{total_success} | 成功率：{total_rate}%"
+        
+        keyboard = [[InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")]]
+        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif query.data == "clear_log":
+        """清理日志"""
+        if os.path.exists(LOG_FILE):
+            open(LOG_FILE, 'w').close()
+        query.edit_message_text("✅ 日志已清空", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")]
+        ]))
+    
+    elif query.data == "back_main":
+        """返回主菜单"""
+        keyboard = [
+            [InlineKeyboardButton("➕ 添加账号", callback_data="add_account")],
+            [InlineKeyboardButton("📋 账号列表", callback_data="list_accounts")],
+            [InlineKeyboardButton("📊 抢包统计", callback_data="show_stats")],
+            [InlineKeyboardButton("🗑️ 清理日志", callback_data="clear_log")]
+        ]
+        query.edit_message_text(
+            f"🤖 红包机器人（Render 稳定版）\n"
+            f"📅 当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"📱 在线账号：{len([p for p in accounts if accounts[p]['status'] == 'active'])}/{len(accounts)}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif query.data == "delete_account":
+        """删除账号"""
+        query.edit_message_text("📱 请输入要删除的手机号（格式：+8613800000000）")
+        context.user_data["action"] = "delete"
+        return PHONE
 
-# 接收手机号
 def input_phone(update: Update, context: CallbackContext):
+    """处理手机号输入"""
     phone = update.message.text.strip()
+    action = context.user_data.get("action", "add")
+    
+    # 删除账号
+    if action == "delete":
+        if phone in accounts:
+            remove_account(phone)
+            update.message.reply_text(f"✅ 账号 {phone} 已删除")
+        else:
+            update.message.reply_text(f"❌ 账号 {phone} 不存在")
+        context.user_data.pop("action", None)
+        return ConversationHandler.END
+    
+    # 添加账号
     if not phone.startswith("+"):
         update.message.reply_text("❌ 格式错误！手机号必须以 + 开头（如 +8613800000000）")
         return PHONE
-    # 保存手机号到上下文
+    
     context.user_data["phone"] = phone
-    # 执行发送验证码（同步调用异步函数）
-    try:
-        ok, msg = loop.run_until_complete(send_verification_code(phone))
-        update.message.reply_text(msg)
-        return CODE if ok else ConversationHandler.END
-    except Exception as e:
-        update.message.reply_text(f"❌ 系统错误：{str(e)}")
-        return ConversationHandler.END
+    # 发送验证码
+    ok, msg = loop.run_until_complete(send_verification_code(phone))
+    update.message.reply_text(msg)
+    return CODE if ok else ConversationHandler.END
 
-# 接收验证码
 def input_code(update: Update, context: CallbackContext):
+    """处理验证码输入"""
     code = update.message.text.strip()
     phone = context.user_data.get("phone")
+    
     if not phone:
         update.message.reply_text("❌ 未检测到手机号，请重新开始")
         return ConversationHandler.END
-    # 执行登录
+    
+    # 登录账号
     ok, msg = loop.run_until_complete(login_account(phone, code))
     if msg == "need_password":
         context.user_data["code"] = code
         update.message.reply_text("🔐 请输入两步验证密码")
         return PASS
+    
     update.message.reply_text(msg)
     if ok:
-        # 启动抢红包监听
-        loop.create_task(watch_redpacket(clients[phone]))
+        # 启动红包监听
+        tasks[phone] = loop.create_task(watch_redpacket(phone))
+        # 启动自动重连
+        loop.create_task(auto_reconnect(phone))
+    
     return ConversationHandler.END
 
-# 接收两步验证密码
 def input_password(update: Update, context: CallbackContext):
+    """处理两步验证密码"""
     pwd = update.message.text.strip()
     phone = context.user_data.get("phone")
     code = context.user_data.get("code")
+    
     if not phone or not code:
         update.message.reply_text("❌ 信息丢失，请重新开始")
         return ConversationHandler.END
-    # 执行登录（带两步验证）
+    
+    # 登录账号（带两步验证）
     ok, msg = loop.run_until_complete(login_account(phone, code, pwd))
     update.message.reply_text(msg)
     if ok:
-        loop.create_task(watch_redpacket(clients[phone]))
+        # 启动红包监听
+        tasks[phone] = loop.create_task(watch_redpacket(phone))
+        # 启动自动重连
+        loop.create_task(auto_reconnect(phone))
+    
     return ConversationHandler.END
 
-# Render 保活（线程版，防止掉线）
+# ==================== 保活与主程序 ====================
 def keep_alive():
+    """Render 保活"""
     while True:
-        threading.Event().wait(300)  # 每5分钟心跳
+        time.sleep(300)
 
-# 主程序
 def main():
+    """主程序"""
+    # 加载账号数据
+    load_accounts()
+    log("✅ 机器人启动中...")
+    
     # 启动保活线程
     threading.Thread(target=keep_alive, daemon=True).start()
     
-    # 初始化机器人（12.8 稳定版）
+    # 初始化机器人
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-
-    # 对话处理器（消除警告配置）
+    
+    # 对话处理器
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_callback, pattern="^add_account$")],
+        entry_points=[CallbackQueryHandler(button_callback, pattern="^add_account$|^delete_account$")],
         states={
             PHONE: [MessageHandler(Filters.text & ~Filters.command, input_phone)],
             CODE: [MessageHandler(Filters.text & ~Filters.command, input_code)],
             PASS: [MessageHandler(Filters.text & ~Filters.command, input_password)],
         },
         fallbacks=[],
-        per_message=False  # 消除 ConversationHandler 警告
+        per_message=False
     )
-
+    
     # 添加处理器
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(button_callback))
     dp.add_handler(conv_handler)
-
-    # 启动机器人（永不退出）
-    print("✅ 机器人已启动，等待指令...")
+    
+    # 启动机器人
     updater.start_polling(timeout=10, read_latency=2)
+    log("✅ 机器人已启动，等待指令...")
     updater.idle()
 
 if __name__ == "__main__":
