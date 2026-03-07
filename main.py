@@ -16,7 +16,7 @@ from telegram.ext import (
 # ==================== 你的配置（只改这里） ====================
 API_ID = 38596687
 API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # 更换为您的 Bot Token
+BOT_TOKEN = "7750611624:AAGk0mqxsBkcSbVpQA37KAQbQnQbxUCV2ww"  # 更换为您的 Bot Token
 ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
 # ==============================================================
