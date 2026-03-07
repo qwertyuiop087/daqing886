@@ -1,5 +1,5 @@
 """
-Telegram 红包控制系统 - Render兼容完整版
+Telegram 红包控制系统 - 已配置好你的所有密钥
 功能：
 1. 一个控制机器人（@your_bot）接收你的指令
 2. 自动登录多个用户账号抢红包
@@ -49,12 +49,16 @@ from telegram.ext import (
     filters, ContextTypes
 )
 
-# ==================== 配置区域 ====================
-# 从环境变量获取（在Render dashboard设置）
-USER_API_ID = int(os.environ.get("USER_API_ID", "0"))
-USER_API_HASH = os.environ.get("USER_API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-YOUR_USER_ID = int(os.environ.get("YOUR_USER_ID", "0"))
+# ==================== 你的配置信息（已填好）====================
+# 从 my.telegram.org 获取的API密钥
+USER_API_ID = 38596687  # 你的api_id
+USER_API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"  # 你的api_hash
+
+# 从 @BotFather 获取的机器人token
+BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"  # 你的bot_token
+
+# 你的Telegram用户ID（从 @userinfobot 获取）
+YOUR_USER_ID = 7793291484  # 你的用户ID
 
 # 目标红包群ID（你的群）
 TARGET_GROUP_ID = -1003472034414
@@ -622,12 +626,12 @@ async def main():
 if __name__ == "__main__":
     print("=" * 50)
     print("🚀 启动红包控制系统...")
-    print(f"📱 目标群ID: {-1003472034414}")
-    print(f"🤖 机器人Token: {7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0[:10]}...")
-    print(f"👤 管理员ID: {7793291484}")
+    print(f"📱 目标群ID: {TARGET_GROUP_ID}")
+    print(f"🤖 机器人Token: {BOT_TOKEN[:10]}...")
+    print(f"👤 管理员ID: {YOUR_USER_ID}")
     print("=" * 50)
     
-    # 检查必要环境变量
+    # 检查必要配置
     if not USER_API_ID or USER_API_ID == 0:
         print("❌ 错误: USER_API_ID 未设置")
         sys.exit(1)
@@ -641,7 +645,7 @@ if __name__ == "__main__":
         print("❌ 错误: YOUR_USER_ID 未设置")
         sys.exit(1)
     
-    print("✅ 环境变量检查通过")
+    print("✅ 配置检查通过")
     
     # 使用这种方式避免事件循环错误
     try:
