@@ -1,7 +1,3 @@
-"""
-Telegram 红包控制系统 - Python 3.14 兼容版（修复登录/验证码）
-"""
-
 import os
 import json
 import asyncio
@@ -11,7 +7,6 @@ import sys
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
-# ==================== Python 3.14 兼容性修复 ====================
 if sys.version_info >= (3, 14):
     try:
         loop = asyncio.get_running_loop()
@@ -19,7 +14,6 @@ if sys.version_info >= (3, 14):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-# ================================================================
 
 from pyrogram import Client as UserClient
 from pyrogram.types import Message as UserMessage
@@ -55,7 +49,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
-# =============================================
 
 
 class RedPacketManager:
@@ -162,7 +155,7 @@ class RedPacketManager:
                     success = await self.click_redpacket(client, message, button)
 
                     if success and phone in self.accounts:
-                        self.accounts[phone]["stats"]["successful_clicks"] += 1
+                        self.accounts[phone]["successful_clicks"] += 1
                         self.save_accounts()
             except:
                 pass
