@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+ENV/
+sessions/
+*.session
+*.session-journal
+accounts.json
+redpacket_log.json
+.DS_Store
