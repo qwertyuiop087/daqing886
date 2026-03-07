@@ -24,15 +24,17 @@ ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
 # ==================================================
 
-# 关键修复：强制输出刷新 + 禁用控制台交互 + 消除 TgCrypto 警告
+# 关键修复：消除所有警告 + 强制输出刷新
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PYROGRAM_NO_TGCRYPTO"] = "1"
 os.environ["PYROGRAM_DISABLE_TELETHON"] = "1"
-# 额外消除 TgCrypto 警告的配置
 os.environ["PYROGRAM_WARN_NO_TGCRYPTO"] = "0"
+# 消除 python-telegram-bot 警告
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="telegram.ext.conversationhandler")
 
 # 对话状态
-PHONE, CODE, PASS, DELETE = range(4)
+PHONE, CODE, PASS = range(3)
 # 文件路径
 ACCOUNTS_FILE = "accounts.json"
 SESSIONS_DIR = "sessions"
@@ -41,14 +43,14 @@ LOG_FILE = "redpacket.log"
 # 初始化目录
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-# 全局变量（确保单例，避免冲突）
+# 全局变量
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 accounts = {}
 clients = {}
 tasks = {}
 
-# ==================== 核心修复工具函数 ====================
+# ==================== 工具函数 ====================
 def clean_session(phone):
     """清理无效会话"""
     session_prefix = f"{SESSIONS_DIR}/{phone.replace('+', '')}"
@@ -57,7 +59,7 @@ def clean_session(phone):
             os.remove(session_prefix + ext)
 
 def load_accounts():
-    """加载账号（容错修复）"""
+    """加载账号"""
     global accounts
     try:
         if os.path.exists(ACCOUNTS_FILE):
@@ -75,19 +77,18 @@ def load_accounts():
             accounts[phone]["status"] = "offline"
 
 def save_accounts():
-    """保存账号（强制刷新）"""
+    """保存账号"""
     try:
         with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
             json.dump(accounts, f, indent=2, ensure_ascii=False)
-        # 强制刷新文件缓存
         os.fsync(f.fileno())
     except Exception as e:
         log(f"保存账号失败：{e}")
 
 def log(content):
-    """日志（修复 flush 参数错误）"""
+    """日志记录"""
     log_str = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {content}"
-    print(log_str, flush=True)  # flush 放在 print 里，不是 log 函数参数
+    print(log_str, flush=True)
     try:
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(log_str + "\n")
@@ -96,7 +97,7 @@ def log(content):
         pass
 
 def update_stats(phone, success):
-    """更新统计"""
+    """更新抢包统计"""
     if phone in accounts:
         accounts[phone]["stats"]["total_attempts"] += 1
         if success:
@@ -107,18 +108,17 @@ def update_stats(phone, success):
         accounts[phone]["last_active"] = datetime.now().isoformat()
         save_accounts()
 
-# ==================== 核心功能（修复响应） ====================
+# ==================== 核心功能 ====================
 async def send_verification_code(phone):
-    """发送验证码（强制响应）"""
+    """发送验证码"""
     clean_session(phone)
     try:
         client = Client(
             f"{SESSIONS_DIR}/{phone.replace('+', '')}",
             API_ID, API_HASH,
-            in_memory=True  # 彻底解决 EOF 错误
+            in_memory=True
         )
         await client.connect()
-        # 强制短信验证码，避免控制台交互
         await client.send_code(phone, force_sms=True, allow_flashcall=False)
         await client.disconnect()
         log(f"验证码已发送到 {phone}")
@@ -132,7 +132,7 @@ async def send_verification_code(phone):
         return False, f"❌ 发送失败：{str(e)[:30]}"
 
 async def login_account(phone, code, password=None):
-    """登录账号（修复 EOF）"""
+    """登录账号"""
     try:
         client = Client(
             f"{SESSIONS_DIR}/{phone.replace('+', '')}",
@@ -140,8 +140,7 @@ async def login_account(phone, code, password=None):
             phone_number=phone,
             phone_code=code,
             password=password,
-            in_memory=True,  # 内存模式，无文件读写
-            takeout=False
+            in_memory=True
         )
         await client.start()
         me = await client.get_me()
@@ -256,9 +255,9 @@ def remove_account(phone):
     save_accounts()
     log(f"账号已删除 {phone}")
 
-# ==================== 机器人命令（强制响应） ====================
+# ==================== 机器人命令 ====================
 def start(update: Update, context: CallbackContext):
-    """启动命令（秒回）"""
+    """启动命令"""
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ 无操作权限")
         return
@@ -277,9 +276,9 @@ def start(update: Update, context: CallbackContext):
     )
 
 def button_callback(update: Update, context: CallbackContext):
-    """按钮回调（必应答）"""
+    """按钮回调"""
     query = update.callback_query
-    query.answer()  # Telegram 强制要求，否则卡死
+    query.answer()
     
     # 添加账号
     if query.data == "add_account":
@@ -359,7 +358,7 @@ def button_callback(update: Update, context: CallbackContext):
         return PHONE
 
 def input_phone(update: Update, context: CallbackContext):
-    """处理手机号（强制响应）"""
+    """处理手机号"""
     phone = update.message.text.strip()
     action = context.user_data.get("action", "add")
     
@@ -379,9 +378,8 @@ def input_phone(update: Update, context: CallbackContext):
         return PHONE
     
     context.user_data["phone"] = phone
-    # 同步执行，确保响应
     ok, msg = loop.run_until_complete(send_verification_code(phone))
-    update.message.reply_text(msg)  # 强制发送回复
+    update.message.reply_text(msg)
     return CODE if ok else ConversationHandler.END
 
 def input_code(update: Update, context: CallbackContext):
@@ -426,23 +424,23 @@ def input_password(update: Update, context: CallbackContext):
 
 # ==================== 保活 + 启动 ====================
 def keep_alive():
-    """Render 保活（线程版）"""
+    """Render 保活"""
     while True:
         time.sleep(300)
 
 def main():
-    """主程序（修复启动）"""
+    """主程序"""
     load_accounts()
     log("✅ 机器人启动中...")
     
     # 启动保活线程
     threading.Thread(target=keep_alive, daemon=True).start()
     
-    # 机器人初始化（强制响应配置）
+    # 初始化机器人
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     
-    # 对话处理器（无警告）
+    # 对话处理器（修复警告）
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_callback, pattern="^add_account$|^delete_account$")],
         states={
@@ -459,12 +457,11 @@ def main():
     dp.add_handler(CallbackQueryHandler(button_callback))
     dp.add_handler(conv_handler)
     
-    # 强制轮询配置（确保响应）
+    # 修复：移除冲突的 clean 参数，只保留 drop_pending_updates
     updater.start_polling(
         timeout=15, 
         read_latency=1, 
-        drop_pending_updates=True,
-        clean=True
+        drop_pending_updates=True
     )
     log("✅ 机器人已启动，等待指令...")
     updater.idle()
