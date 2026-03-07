@@ -1,243 +1,183 @@
 # -*- coding: utf-8 -*-
 import os
-import json
 import asyncio
 import logging
-import threading
 from pathlib import Path
-from datetime import datetime
+from threading import Thread
 
-# 引入 Flask 用于 Render 端口保活
 from flask import Flask
-# 引入 Pyrogram
-from pyrogram import Client, filters, enums
-from pyrogram.errors import (
-    PhoneNumberInvalid, FloodWait, PhoneCodeInvalid, 
-    SessionPasswordNeeded, PhoneCodeExpired
-)
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon import TelegramClient, events, errors
+from telethon.tl.types import ReplyInlineMarkup
 
 # =========================
-# 1. 核心配置 (用户同步)
+# 1. 基础配置
 # =========================
+# API_ID/HASH 是“应用程序身份证”，填一次即可登录无数个号码
 API_ID = 38596687
 API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
+# BOT_TOKEN 是你的“控制面板”，用来指挥系统
 BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
 ADMIN_ID = 7793291484
 
-# Render 端口
 PORT = int(os.getenv("PORT", "8080"))
+SESSION_DIR = Path("sessions")
+SESSION_DIR.mkdir(exist_ok=True)
 
-# 持久化路径
-SESSION_DIR = "sessions"
-os.makedirs(SESSION_DIR, exist_ok=True)
-DB_FILE = "accounts_db.json"
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("RedPacketBot")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger("System")
 
 # =========================
-# 2. Render 保活服务 (Flask)
+# 2. Web 存活支持 (Render 专用)
 # =========================
-web_app = Flask(__name__)
+app = Flask(__name__)
+@app.route('/')
+def health(): return "System Online", 200
 
-@web_app.route('/')
-def health():
-    return "Bot is Running", 200
-
-def run_flask():
-    web_app.run(host='0.0.0.0', port=PORT)
+def run_server():
+    app.run(host='0.0.0.0', port=PORT)
 
 # =========================
-# 3. 数据层
+# 3. UserBot 逻辑 (执行点击任务)
 # =========================
-def load_db():
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: pass
-    return {"running_phones": [], "stats": {"total": 0, "success": 0}}
+# 存储当前所有已登录并运行的个人账号实例
+running_accounts = {}
 
-def save_db(data):
-    with open(DB_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4)
-
-db = load_db()
-user_states = {}  # 存放临时登录状态数据
-active_clients = {} # 存放运行中的 Client 实例
-
-# =========================
-# 4. 核心功能: 抢红包监听
-# =========================
-async def start_red_packet_monitor(phone):
-    """为每个账号开启独立的抢红包任务"""
-    # 模拟真实移动端设备信息提高稳定性
-    client = Client(
-        name=f"{SESSION_DIR}/{phone}",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        device_model="iPhone 15 Pro",
-        system_version="iOS 17.4"
-    )
+async def start_user_worker(phone):
+    """
+    启动一个个人账号的监听任务
+    phone: 手机号字符串
+    """
+    # 路径指向存储好的 .session 文件，实现免登录重启
+    session_path = str(SESSION_DIR / phone)
+    client = TelegramClient(session_path, API_ID, API_HASH, 
+                            device_model="iPhone 15", system_version="17.4")
     
-    @client.on_message(filters.group)
-    async def hongbao_handler(c, msg):
-        # 简单逻辑：如果消息有内联键盘，则尝试点击
-        if msg.reply_markup:
-            db["stats"]["total"] += 1
-            try:
-                # 模拟点击第一个按钮
-                await msg.click(0)
-                db["stats"]["success"] += 1
-                logger.info(f"[{phone}] 成功尝试领取红包")
-            except Exception as e:
-                logger.error(f"[{phone}] 领取失败: {e}")
-            save_db(db)
-
     try:
         await client.start()
-        active_clients[phone] = client
-        if phone not in db["running_phones"]:
-            db["running_phones"].append(phone)
-            save_db(db)
-        logger.info(f"账号 {phone} 监控已启动")
-        # 保持运行
-        await asyncio.Event().wait()
+        running_accounts[phone] = client
+        logger.info(f"账号 {phone} 已成功上线.")
+
+        # 核心点击逻辑：监听所有新消息
+        @client.on(events.NewMessage)
+        async def click_handler(event):
+            # 如果消息包含内联按钮（Inline Buttons）
+            if event.reply_markup and isinstance(event.reply_markup, ReplyInlineMarkup):
+                try:
+                    # 这里的 0 代表尝试点击第一个按钮（通常是抢红包按钮）
+                    await event.click(0)
+                    logger.info(f"账号 {phone} 成功执行点击动作")
+                except Exception as e:
+                    logger.error(f"账号 {phone} 点击按钮失败: {e}")
+
+        # 保持该账号在线
+        await client.run_until_disconnected()
     except Exception as e:
-        logger.error(f"账号 {phone} 运行异常: {e}")
+        logger.error(f"账号 {phone} 异常离线: {e}")
     finally:
-        if phone in active_clients: del active_clients[phone]
+        running_accounts.pop(phone, None)
 
 # =========================
-# 5. 管理 Bot 逻辑
+# 4. 管理机器人逻辑 (指挥官)
 # =========================
-bot = Client(
-    "manager_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
+manager = TelegramClient('manager_session', API_ID, API_HASH)
+login_context = {}  # 记录当前哪个管理员正在添加哪个账号
 
-@bot.on_message(filters.command("start") & filters.user(ADMIN_ID))
-async def cmd_start(c, m):
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("➕ 添加账号", callback_data="add_acc"),
-        InlineKeyboardButton("📊 运行状态", callback_data="view_status")
-    ]])
-    await m.reply_text("🏮 欢迎使用红包监控管理系统\n请点击下方按钮操作：", reply_markup=keyboard)
+@manager.on(events.NewMessage(pattern='/start', from_users=ADMIN_ID))
+async def cmd_start(event):
+    await event.respond("🛡️ **红包监控系统已就绪**\n\n"
+                       "发送 `/add` 开始登录你的第一个个人账号\n"
+                       "发送 `/status` 查看当前在线账号数量")
 
-@bot.on_callback_query(filters.user(ADMIN_ID))
-async def handle_query(c, q):
-    if q.data == "add_acc":
-        user_states[q.from_user.id] = {"step": "phone"}
-        await q.message.edit_text("📱 请输入手机号 (格式: +86138...)：")
-    
-    elif q.data == "view_status":
-        s = db["stats"]
-        msg = (f"📈 运行中账号: {len(active_clients)}\n"
-               f"🧧 已尝试领取: {s['total']}\n"
-               f"✅ 成功命中: {s['success']}")
-        await q.message.edit_text(msg, reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("返回", callback_data="back_main")
-        ]]))
-    
-    elif q.data == "back_main":
-        await cmd_start(c, q.message)
+@manager.on(events.NewMessage(pattern='/add', from_users=ADMIN_ID))
+async def cmd_add(event):
+    login_context[event.sender_id] = {'step': 'phone'}
+    await event.respond("📱 请输入你要登录的个人号手机号（带+号）：\n例如：`+8613800000000`")
 
-@bot.on_message(filters.user(ADMIN_ID) & filters.text)
-async def login_flow(c, m):
-    uid = m.from_user.id
-    if uid not in user_states: return
+@manager.on(events.NewMessage(from_users=ADMIN_ID))
+async def login_flow(event):
+    uid = event.sender_id
+    if uid not in login_context: return
     
-    state = user_states[uid]
-    text = m.text.strip()
-    
-    # 步骤 1: 发送验证码 (模仿核心逻辑)
-    if state["step"] == "phone":
-        phone = text
-        if not phone.startswith("+"):
-            return await m.reply("❌ 格式错误，必须以 + 开头")
-        
-        temp_client = Client(
-            f"{SESSION_DIR}/{phone}", 
-            API_ID, API_HASH,
-            device_model="iPhone 15 Pro"
-        )
-        await temp_client.connect()
+    user_data = login_context[uid]
+    input_text = event.text.strip()
+
+    # 步骤 1: 发送验证码
+    if user_data['step'] == 'phone':
+        # 为这个新号码创建一个临时的客户端
+        tmp_client = TelegramClient(str(SESSION_DIR / input_text), API_ID, API_HASH)
+        await tmp_client.connect()
         try:
-            # 发送验证码
-            sent_code = await temp_client.send_code(phone)
-            user_states[uid] = {
-                "step": "code", "phone": phone, 
-                "client": temp_client, "hash": sent_code.phone_code_hash
+            # 向 Telegram 请求发送验证码
+            sent_code = await tmp_client.send_code_request(input_text)
+            login_context[uid] = {
+                'step': 'code', 
+                'phone': input_text, 
+                'client': tmp_client, 
+                'hash': sent_code.phone_code_hash
             }
-            await m.reply(f"📩 验证码已发送至 {phone}\n请在下方输入验证码：\n\n(注意: 请检查 Telegram 官方会话消息)")
-        except FloodWait as e:
-            await m.reply(f"⚠️ 频繁操作，请等待 {e.value} 秒")
-            await temp_client.disconnect()
-            del user_states[uid]
+            await event.respond(f"✅ 验证码已发送至 `{input_text}` 的 Telegram 官方会话，请查看并在此回复：")
         except Exception as e:
-            await m.reply(f"❌ 发送失败: {e}")
-            await temp_client.disconnect()
-            del user_states[uid]
+            await event.respond(f"❌ 失败: {e}")
+            await tmp_client.disconnect()
+            del login_context[uid]
 
-    # 步骤 2: 校验验证码
-    elif state["step"] == "code":
+    # 步骤 2: 输入验证码后的处理
+    elif user_data['step'] == 'code':
+        client = user_data['client']
         try:
-            client = state["client"]
-            phone = state["phone"]
-            await client.sign_in(phone, state["hash"], text)
-            
-            # 登录成功
-            await m.reply(f"✅ 账号 {phone} 登录成功，正在开启监控...")
-            asyncio.create_task(start_red_packet_monitor(phone))
-            del user_states[uid]
-        except SessionPasswordNeeded:
-            state["step"] = "2fa"
-            await m.reply("🔐 此账号需要两步验证密码，请输入：")
-        except PhoneCodeInvalid:
-            await m.reply("❌ 验证码错误，请检查并重新输入：")
-        except PhoneCodeExpired:
-            await m.reply("❌ 验证码已过期，请重新登录。")
-            del user_states[uid]
+            # 尝试使用验证码登录
+            await client.sign_in(user_data['phone'], input_text, phone_code_hash=user_data['hash'])
+            await event.respond(f"🎉 账号 {user_data['phone']} 登录成功！已启动自动抢红包。")
+            # 登录成功后，将该账号转入后台异步运行
+            asyncio.create_task(start_user_worker(user_data['phone']))
+            del login_context[uid]
+        except errors.SessionPasswordNeededError:
+            # 处理二次验证密码
+            user_data['step'] = '2fa'
+            await event.respond("🔐 该账号开启了两步验证，请输入你的 2FA 密码：")
         except Exception as e:
-            await m.reply(f"❌ 登录失败: {e}")
-            del user_states[uid]
+            await event.respond(f"❌ 登录失败: {e}")
+            del login_context[uid]
 
-    # 步骤 3: 两步验证
-    elif state["step"] == "2fa":
+    # 步骤 3: 处理两步验证密码
+    elif user_data['step'] == '2fa':
         try:
-            await state["client"].check_password(text)
-            phone = state["phone"]
-            await m.reply(f"✅ {phone} 登录成功！")
-            asyncio.create_task(start_red_packet_monitor(phone))
-            del user_states[uid]
+            await user_data['client'].sign_in(password=input_text)
+            await event.respond(f"🎉 账号 {user_data['phone']} (2FA) 登录成功！")
+            asyncio.create_task(start_user_worker(user_data['phone']))
+            del login_context[uid]
         except Exception as e:
-            await m.reply(f"❌ 密码错误: {e}")
+            await event.respond(f"❌ 密码错误: {e}")
+
+@manager.on(events.NewMessage(pattern='/status', from_users=ADMIN_ID))
+async def cmd_status(event):
+    count = len(running_accounts)
+    msg = f"📊 **系统状态**\n目前共有 `{count}` 个账号正在后台监控红包。"
+    await event.respond(msg)
 
 # =========================
-# 6. 系统启动入口
+# 5. 系统启动入口
 # =========================
 async def main():
-    # A. 启动管理 Bot
-    await bot.start()
-    logger.info("Bot Manager Started")
+    # A. 启动管理机器人
+    await manager.start(bot_token=BOT_TOKEN)
+    logger.info("Manager Bot Started.")
 
-    # B. 断线重连已保存的账号
-    for phone in db["running_phones"]:
-        asyncio.create_task(start_red_packet_monitor(phone))
-    
-    # C. 防止主任务退出
-    await asyncio.Event().wait()
+    # B. 自动拉起 sessions 文件夹中已有的旧账号
+    for session_file in SESSION_DIR.glob("*.session"):
+        phone = session_file.stem
+        if phone != "manager_session":
+            asyncio.create_task(start_user_worker(phone))
+
+    # C. 持续运行
+    await manager.run_until_disconnected()
 
 if __name__ == "__main__":
-    # 1. 启动 Flask 保活线程 (满足 Render 端口需求)
-    threading.Thread(target=run_web_server, daemon=True).start()
+    # 启动端口监听用于 Render 存活
+    Thread(target=run_server, daemon=True).start()
     
-    # 2. 启动异步主逻辑
-    loop = asyncio.get_event_loop()
+    # 启动异步主程序
     try:
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass
