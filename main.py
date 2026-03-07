@@ -1,10 +1,11 @@
 """
-Telegram 红包控制系统 - 已配置好你的所有密钥
+Telegram 红包控制系统 - 已修复版本兼容性问题
 功能：
 1. 一个控制机器人（@your_bot）接收你的指令
 2. 自动登录多个用户账号抢红包
 3. 所有操作通过机器人完成
 4. 修复了Render环境的 "no current event loop" 错误
+5. 修复了 python-telegram-bot v20.x 的兼容性问题
 """
 
 import os
@@ -48,6 +49,7 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler,
     filters, ContextTypes
 )
+from telegram.error import TelegramError
 
 # ==================== 你的配置信息（已填好）====================
 # 从 my.telegram.org 获取的API密钥
@@ -578,7 +580,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     """主函数"""
     try:
-        # 创建机器人应用
+        # 创建机器人应用 - v20.x 版本的新方式
         app = Application.builder().token(BOT_TOKEN).build()
         
         # 添加对话处理器
@@ -600,11 +602,17 @@ async def main():
         # 启动自动登录已有账号
         asyncio.create_task(manager.auto_login_all())
         
-        # 启动机器人
-        logger.info("🤖 红包控制系统已启动...")
+        # 启动机器人 - v20.x 版本的正确启动方式
+        logger.info("🤖 红包控制系统正在启动...")
+        
+        # 初始化并启动
         await app.initialize()
         await app.start()
+        
+        # 启动轮询
         await app.updater.start_polling()
+        
+        logger.info("✅ 机器人已启动，正在监听消息...")
         
         # 保持运行
         while True:
@@ -616,11 +624,13 @@ async def main():
         traceback.print_exc()
     finally:
         try:
-            await app.updater.stop()
-            await app.stop()
-            await app.shutdown()
-        except:
-            pass
+            # 安全关闭 - v20.x 版本的正确关闭方式
+            if 'app' in locals():
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+        except Exception as e:
+            logger.error(f"关闭时出错: {e}")
 
 
 if __name__ == "__main__":
