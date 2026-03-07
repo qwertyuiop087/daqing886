@@ -1,5 +1,9 @@
 import os
 import asyncio
+import signal
+import sys
+import time
+import fcntl
 from pyrogram import Client
 from pyrogram.errors import PhoneNumberInvalid, FloodWait, PhoneCodeInvalid, SessionPasswordNeeded
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -18,7 +22,7 @@ ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
 # ==================================================
 
-# 环境配置
+# 环境配置（彻底消除警告）
 os.environ["PYROGRAM_NO_TGCRYPTO"] = "1"
 os.environ["PYROGRAM_WARN_NO_TGCRYPTO"] = "0"
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -26,35 +30,66 @@ os.environ["PYTHONUNBUFFERED"] = "1"
 # 对话状态
 PHONE, CODE, PASS = 1, 2, 3
 SESSIONS = "sessions"
+LOCK_FILE = "/tmp/bot.lock"  # 进程锁文件
 os.makedirs(SESSIONS, exist_ok=True)
 
-# 全局异步循环
+# 全局变量
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
+updater = None
 
-# ==================== 核心修复：兼容 Pyrogram 参数 ====================
+# ==================== 修复1：进程锁（解决多实例冲突） ====================
+def acquire_lock():
+    """获取进程锁，确保只有一个实例运行"""
+    try:
+        lock_file = open(LOCK_FILE, 'w')
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        return lock_file
+    except:
+        print("❌ 已有机器人实例在运行，退出！")
+        sys.exit(1)
+
+def release_lock(lock_file):
+    """释放进程锁"""
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+        os.remove(LOCK_FILE)
+    except:
+        pass
+
+def signal_handler(signum, frame):
+    """优雅退出（处理 Render 停止信号）"""
+    print("\n🔌 机器人正在退出...")
+    if updater:
+        updater.stop()
+    release_lock(lock_file)
+    sys.exit(0)
+
+# ==================== 修复2：Pyrogram send_code 兼容 ====================
 async def send_code(phone):
-    """发送验证码（修复参数不匹配问题）"""
+    """发送验证码（兼容所有 Pyrogram 版本）"""
     # 清理旧会话
-    session_file = f"{SESSIONS}/{phone.replace('+', '')}"
+    session_prefix = f"{SESSIONS}/{phone.replace('+', '')}"
     for ext in [".session", ".session-journal"]:
-        if os.path.exists(session_file + ext):
-            os.remove(session_file + ext)
+        if os.path.exists(session_prefix + ext):
+            os.remove(session_prefix + ext)
     
     try:
-        # 初始化客户端（兼容所有 Pyrogram 版本）
+        # 初始化客户端（仅用必选参数，避免版本兼容问题）
         client = Client(
-            name=f"{SESSIONS}/{phone.replace('+', '')}",
+            name=session_prefix,
             api_id=API_ID,
             api_hash=API_HASH,
-            in_memory=True  # 内存模式，避免文件问题
+            in_memory=True  # 彻底避免文件读写错误
         )
         await client.connect()
         
-        # 修复 send_code 参数：移除不兼容的参数，使用基础写法
-        sent_code = await client.send_code(
-            phone_number=phone  # 显式指定参数名，避免位置参数错误
-        )
+        # 核心修复：仅传递手机号，不使用任何可选参数
+        # 兼容 Pyrogram 所有版本的 send_code 方法
+        await client.send_code(phone)
         
         await client.disconnect()
         return True, "✅ 验证码已发送（查收 Telegram 消息/短信）"
@@ -64,8 +99,9 @@ async def send_code(phone):
     except FloodWait as e:
         return False, f"❌ 操作频繁，请等待 {e.value} 秒后重试"
     except Exception as e:
-        error_msg = str(e)[:50]  # 完整报错信息
-        return False, f"❌ 发送失败：{error_msg}"
+        # 完整错误信息，方便排查
+        error_detail = str(e)[:60]
+        return False, f"❌ 发送失败：{error_detail}"
 
 async def login(phone, code, pwd=None):
     """登录账号（修复 EOF 错误）"""
@@ -79,7 +115,6 @@ async def login(phone, code, pwd=None):
             password=pwd,
             in_memory=True
         )
-        # 跳过控制台输入，直接登录
         await client.start()
         return True, client, "✅ 登录成功！开始抢红包"
     except PhoneCodeInvalid:
@@ -185,12 +220,21 @@ def handle_password(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 # ==================== 主程序 ====================
-def main():
-    """启动机器人"""
+if __name__ == "__main__":
+    # 1. 获取进程锁，解决多实例冲突
+    lock_file = acquire_lock()
+    
+    # 2. 注册信号处理，优雅退出
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    print("✅ 机器人启动中...")
+    
+    # 3. 初始化机器人（无冲突配置）
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     
-    # 对话处理器（状态流转稳定）
+    # 4. 对话处理器（状态流转稳定）
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_click, pattern="^add$")],
         states={
@@ -202,17 +246,20 @@ def main():
         per_message=False
     )
     
-    # 添加处理器
+    # 5. 添加处理器
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(conv_handler)
     
-    # 启动轮询（无冲突参数）
+    # 6. 启动轮询（无冲突参数）
     updater.start_polling(
-        timeout=15,
-        read_latency=1,
-        drop_pending_updates=True
+        timeout=20,
+        read_latency=2,
+        drop_pending_updates=True,
+        clean=False  # 关键：关闭 clean 参数，避免冲突
     )
+    
+    print("✅ 机器人已启动，等待指令...")
     updater.idle()
-
-if __name__ == "__main__":
-    main()
+    
+    # 7. 释放锁（程序正常退出时）
+    release_lock(lock_file)
