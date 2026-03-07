@@ -9,12 +9,12 @@ from flask import Flask
 from threading import Thread
 
 # --- 基础配置 (请通过 my.telegram.org 获取) ---
-API_ID: Final = 1234567  # 替换为你的 API ID
-API_HASH: Final = "你的_API_HASH"
-BOT_TOKEN: Final = "你的_CONTROL_BOT_TOKEN"
+API_ID: Final = 38596687  # 替换为你的 API ID
+API_HASH: Final = "3a2d98dee0760aa201e6e5414dbc5b4d"
+BOT_TOKEN: Final = "7750611624:AAGk0mqxsBkcSbVpQA37KAQbQnQbxUCV2ww"
 
 # 监控配置：指定要抢红包的群组（ID或用户名）
-TARGET_CHAT_IDS: Final = [-100123456789, "red_packet_group_username"]
+TARGET_CHAT_IDS: Final = [-1003472034414, "red_packet_group_username"]
 # 匹配红包领取按钮上的文字
 CLICK_KEYWORDS: Final = ["领取", "抢红包", "红包", "Claim", "Get", "快抢"]
 
