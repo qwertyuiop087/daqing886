@@ -1,6 +1,5 @@
 """
-Telegram 红包控制系统 - 完全修复版
-修复了 python-telegram-bot v20.x 的关闭错误
+Telegram 红包控制系统 - Render稳定版
 """
 
 import os
@@ -9,57 +8,21 @@ import asyncio
 import logging
 import random
 import sys
-import signal
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
-# ==================== 关键修复：为Render环境添加事件循环 ====================
-try:
-    loop = asyncio.get_running_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# ==================== 基础配置 ====================
+USER_API_ID = 38596687
+USER_API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
+BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
+YOUR_USER_ID = 7793291484
+TARGET_GROUP_ID = -1003472034414
 
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-    print("✅ nest_asyncio 已应用")
-except ImportError:
-    print("⚠️ nest_asyncio 未安装，如果遇到事件循环错误请安装：pip install nest_asyncio")
-# =========================================================================
-
-from pyrogram import Client as UserClient
-from pyrogram.types import Message as UserMessage
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import (
-    PhoneNumberInvalid, PhoneCodeInvalid, 
-    PasswordHashInvalid, FloodWait,
-    SessionRevoked, AuthKeyDuplicated
-)
-
-from telegram import Update, InlineKeyboardButton as TGBotton, InlineKeyboardMarkup as TGMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ConversationHandler,
-    filters, ContextTypes
-)
-from telegram.error import TelegramError
-
-# ==================== 你的配置信息 ====================
-USER_API_ID = 38596687  # 你的api_id
-USER_API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"  # 你的api_hash
-BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"  # 你的bot_token
-YOUR_USER_ID = 7793291484  # 你的用户ID
-TARGET_GROUP_ID = -1003472034414  # 目标红包群ID
-
-# 数据文件
 ACCOUNTS_FILE = "accounts.json"
 SESSIONS_DIR = "sessions"
 
-# 对话状态
 PHONE, CODE, PASSWORD = range(3)
 
-# 日志配置
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -69,10 +32,20 @@ logger = logging.getLogger(__name__)
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 # =============================================
 
+# 延迟导入，确保环境就绪
+from pyrogram import Client as UserClient
+from pyrogram.types import Message as UserMessage, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import PhoneNumberInvalid, PhoneCodeInvalid, PasswordHashInvalid, FloodWait
+
+from telegram import Update, InlineKeyboardButton as TGBotton, InlineKeyboardMarkup as TGMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ConversationHandler,
+    filters, ContextTypes
+)
+
 
 class RedPacketManager:
-    """红包账号管理器"""
-    
     def __init__(self):
         self.accounts: Dict[str, dict] = {}
         self.clients: Dict[str, UserClient] = {}
@@ -85,8 +58,7 @@ class RedPacketManager:
                 with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
                     self.accounts = json.load(f)
                 logger.info(f"✅ 已加载 {len(self.accounts)} 个账号")
-            except Exception as e:
-                logger.error(f"加载账号失败: {e}")
+            except:
                 self.accounts = {}
         else:
             self.accounts = {}
@@ -96,8 +68,8 @@ class RedPacketManager:
         try:
             with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.accounts, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"保存账号失败: {e}")
+        except:
+            pass
     
     def add_account(self, phone: str):
         if phone not in self.accounts:
@@ -108,13 +80,9 @@ class RedPacketManager:
                 "last_active": None,
                 "user_id": None,
                 "first_name": None,
-                "stats": {
-                    "total_attempts": 0,
-                    "successful_clicks": 0
-                }
+                "stats": {"total_attempts": 0, "successful_clicks": 0}
             }
             self.save_accounts()
-            logger.info(f"✅ 已添加账号: {phone}")
             return True
         return False
     
@@ -133,26 +101,19 @@ class RedPacketManager:
             
             del self.accounts[phone]
             self.save_accounts()
-            logger.info(f"✅ 已删除账号: {phone}")
             return True
         return False
     
     def is_redpacket(self, message: UserMessage) -> Tuple[bool, Optional[InlineKeyboardButton]]:
         if not message or not message.reply_markup:
             return False, None
-        if not isinstance(message.reply_markup, InlineKeyboardMarkup):
-            return False, None
         
-        keywords = ["领取", "点我", "open", "claim", "红包", "red", "拆开", "开红包", "点击领取"]
+        keywords = ["领取", "点我", "open", "claim", "红包", "red", "拆开", "开红包"]
         
         for row in message.reply_markup.inline_keyboard:
             for button in row:
-                button_text = button.text.lower()
-                if any(keyword in button_text for keyword in keywords):
+                if any(k in button.text.lower() for k in keywords):
                     return True, button
-                if button.callback_data and any(keyword in button_text for keyword in ["红包", "red"]):
-                    return True, button
-        
         return False, None
     
     async def click_redpacket(self, client: UserClient, message: UserMessage, button: InlineKeyboardButton) -> bool:
@@ -166,10 +127,7 @@ class RedPacketManager:
                 )
                 return True
             return False
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-            return False
-        except Exception:
+        except:
             return False
     
     async def listen_redpackets(self, phone: str):
@@ -177,17 +135,14 @@ class RedPacketManager:
         if not client:
             return
         
-        logger.info(f"👂 开始监听账号 {phone} 的红包")
-        
         @client.on_message()
-        async def message_handler(client: UserClient, message: UserMessage):
+        async def handler(client: UserClient, message: UserMessage):
             try:
                 if message.chat.id != TARGET_GROUP_ID:
                     return
                 
                 is_rp, button = self.is_redpacket(message)
                 if is_rp and button:
-                    logger.info(f"💰 {phone} 发现红包")
                     if phone in self.accounts:
                         self.accounts[phone]["stats"]["total_attempts"] += 1
                     
@@ -196,15 +151,14 @@ class RedPacketManager:
                     if success and phone in self.accounts:
                         self.accounts[phone]["stats"]["successful_clicks"] += 1
                         self.save_accounts()
-                        
-            except Exception as e:
-                logger.error(f"消息处理错误 {phone}: {e}")
+            except:
+                pass
         
         try:
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
-            logger.info(f"停止监听 {phone}")
+            pass
     
     async def login_account(self, phone: str, code: str = None, password: str = None) -> Tuple[bool, str]:
         try:
@@ -243,9 +197,6 @@ class RedPacketManager:
             return False, f"❌ 登录失败: {str(e)}"
     
     async def auto_login_all(self):
-        if not self.accounts:
-            return
-        
         for phone, info in self.accounts.items():
             if info.get("status") == "active":
                 try:
@@ -262,15 +213,11 @@ class RedPacketManager:
                     
                     self.clients[phone] = client
                     info["status"] = "active"
-                    info["last_active"] = datetime.now().isoformat()
                     
                     task = asyncio.create_task(self.listen_redpackets(phone))
                     self.tasks[phone] = task
                     
-                    logger.info(f"✅ 自动登录成功: {phone} ({me.first_name})")
-                    
-                except Exception as e:
-                    logger.error(f"自动登录失败 {phone}: {e}")
+                except:
                     info["status"] = "error"
                 
                 await asyncio.sleep(2)
@@ -278,136 +225,74 @@ class RedPacketManager:
         self.save_accounts()
 
 
-# 全局管理器
 manager = RedPacketManager()
 
 
-# ==================== 控制机器人 ====================
-
+# ==================== 机器人处理器 ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
-        await update.message.reply_text("❌ 你没有权限使用这个机器人")
+    if update.effective_user.id != YOUR_USER_ID:
+        await update.message.reply_text("❌ 无权限")
         return
     
     keyboard = [
         [TGBotton("📱 添加账号", callback_data="add_account")],
         [TGBotton("📋 账号列表", callback_data="list_accounts")],
-        [TGBotton("📊 抢包统计", callback_data="show_stats")],
-        [TGBotton("🔄 刷新状态", callback_data="refresh")]
+        [TGBotton("📊 统计", callback_data="stats")],
     ]
     
     await update.message.reply_text(
-        "🤖 *红包控制系统*\n\n"
-        f"当前在线账号: {len(manager.clients)}/{len(manager.accounts)}\n"
-        f"目标群ID: `{TARGET_GROUP_ID}`\n\n"
-        "请选择操作:",
-        reply_markup=TGMarkup(keyboard),
-        parse_mode='Markdown'
+        f"🤖 红包系统\n在线: {len(manager.clients)}/{len(manager.accounts)}",
+        reply_markup=TGMarkup(keyboard)
     )
 
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
-        await query.edit_message_text("❌ 你没有权限")
+    if update.effective_user.id != YOUR_USER_ID:
         return
     
-    data = query.data
-    
-    if data == "add_account":
-        await query.edit_message_text(
-            "📱 *添加新账号*\n\n"
-            "请输入手机号（格式：+861234567890）:",
-            parse_mode='Markdown'
-        )
+    if query.data == "add_account":
+        await query.edit_message_text("📱 请输入手机号 (+86...):")
         return PHONE
     
-    elif data == "list_accounts":
+    elif query.data == "list_accounts":
         if not manager.accounts:
             await query.edit_message_text("📭 暂无账号")
             return
         
-        text = "📋 *账号列表*\n\n"
-        keyboard = []
-        
+        text = "📋 账号列表:\n"
         for phone, info in manager.accounts.items():
-            status_icon = "🟢" if info["status"] == "active" else "🔴" if info["status"] == "error" else "🟡"
-            name = info.get("first_name", "未登录")
-            text += f"{status_icon} `{phone}`\n   └ {name}\n"
-            keyboard.append([TGBotton(f"🗑️ 删除 {phone[-4:]}", callback_data=f"del_{phone}")])
-        
-        keyboard.append([TGBotton("🔙 返回", callback_data="back")])
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=TGMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+            status = "🟢" if info["status"] == "active" else "🔴"
+            text += f"{status} {phone}\n"
+        await query.edit_message_text(text)
     
-    elif data == "show_stats":
-        total = len(manager.accounts)
-        active = len(manager.clients)
-        total_attempts = sum(a.get("stats", {}).get("total_attempts", 0) for a in manager.accounts.values())
-        total_success = sum(a.get("stats", {}).get("successful_clicks", 0) for a in manager.accounts.values())
-        success_rate = (total_success / total_attempts * 100) if total_attempts > 0 else 0
-        
-        text = (
-            "📊 *抢包统计*\n\n"
-            f"总账号数: {total}\n"
-            f"在线账号: {active}\n"
-            f"总尝试: {total_attempts}\n"
-            f"成功次数: {total_success}\n"
-            f"成功率: {success_rate:.1f}%"
-        )
-        
-        await query.edit_message_text(text, parse_mode='Markdown')
-    
-    elif data == "refresh":
-        await query.edit_message_text(f"🔄 状态已刷新\n\n在线账号: {len(manager.clients)}/{len(manager.accounts)}")
-    
-    elif data == "back":
-        await start(update, context)
-    
-    elif data.startswith("del_"):
-        phone = data[4:]
-        if manager.remove_account(phone):
-            await query.edit_message_text(f"✅ 已删除账号 {phone}")
-        else:
-            await query.edit_message_text(f"❌ 删除失败")
+    elif query.data == "stats":
+        total = sum(a["stats"]["total_attempts"] for a in manager.accounts.values())
+        success = sum(a["stats"]["successful_clicks"] for a in manager.accounts.values())
+        await query.edit_message_text(f"📊 总尝试: {total}\n✅ 成功: {success}")
     
     return ConversationHandler.END
 
 
-async def add_account_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
+async def add_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_USER_ID:
         return ConversationHandler.END
     
     phone = update.message.text.strip()
     if not phone.startswith('+'):
-        await update.message.reply_text("❌ 手机号格式错误，请以 + 开头")
+        await update.message.reply_text("❌ 格式错误，请以+开头")
         return PHONE
     
     context.user_data['phone'] = phone
-    
-    if manager.add_account(phone):
-        await update.message.reply_text(
-            f"✅ 账号 {phone} 已添加\n\n"
-            "现在请输入登录验证码（查看Render日志获取）:"
-        )
-        return CODE
-    else:
-        await update.message.reply_text("❌ 账号已存在")
-        return ConversationHandler.END
+    manager.add_account(phone)
+    await update.message.reply_text("✅ 已添加，请输入验证码:")
+    return CODE
 
 
-async def add_account_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
+async def add_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_USER_ID:
         return ConversationHandler.END
     
     code = update.message.text.strip()
@@ -416,7 +301,7 @@ async def add_account_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success, msg = await manager.login_account(phone, code)
     
     if success:
-        await update.message.reply_text(f"✅ {msg}\n\n开始监听红包...")
+        await update.message.reply_text(f"✅ {msg}")
         return ConversationHandler.END
     else:
         if "两步验证" in msg:
@@ -428,9 +313,8 @@ async def add_account_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
 
-async def add_account_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
+async def add_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_USER_ID:
         return ConversationHandler.END
     
     password = update.message.text.strip()
@@ -443,159 +327,62 @@ async def add_account_password(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
-        return ConversationHandler.END
-    
-    await update.message.reply_text("❌ 操作已取消")
+    await update.message.reply_text("❌ 已取消")
     return ConversationHandler.END
 
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"更新出错 {update}: {context.error}")
-
-
-# ==================== 主程序 ====================
-
-class BotRunner:
-    """机器人运行管理器 - 避免关闭时的错误"""
-    
-    def __init__(self):
-        self.app = None
-        self.running = True
-    
-    async def start(self):
-        """启动机器人"""
-        try:
-            # 创建应用
-            self.app = Application.builder().token(BOT_TOKEN).build()
-            
-            # 添加处理器
-            conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(button_callback, pattern="^add_account$")],
-                states={
-                    PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_account_phone)],
-                    CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_account_code)],
-                    PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_account_password)],
-                },
-                fallbacks=[CommandHandler("cancel", cancel)]
-            )
-            
-            self.app.add_handler(CommandHandler("start", start))
-            self.app.add_handler(CallbackQueryHandler(button_callback))
-            self.app.add_handler(conv_handler)
-            self.app.add_error_handler(error_handler)
-            
-            # 启动红包监听
-            asyncio.create_task(manager.auto_login_all())
-            
-            # 初始化并启动
-            await self.app.initialize()
-            await self.app.start()
-            
-            # 启动轮询
-            await self.app.updater.start_polling()
-            
-            logger.info("✅ 机器人已成功启动")
-            
-            # 保持运行
-            while self.running:
-                await asyncio.sleep(1)
-                
-        except Exception as e:
-            logger.error(f"机器人运行错误: {e}")
-        finally:
-            await self.cleanup()
-    
-    async def cleanup(self):
-        """清理资源 - 安全的关闭方式"""
-        logger.info("正在关闭机器人...")
-        try:
-            if self.app:
-                # 先停止轮询
-                if hasattr(self.app, 'updater') and self.app.updater:
-                    try:
-                        await self.app.updater.stop()
-                    except Exception as e:
-                        logger.debug(f"停止轮询时出错（可忽略）: {e}")
-                
-                # 停止应用
-                try:
-                    await self.app.stop()
-                except Exception as e:
-                    logger.debug(f"停止应用时出错（可忽略）: {e}")
-                
-                # 关闭应用
-                try:
-                    await self.app.shutdown()
-                except Exception as e:
-                    logger.debug(f"关闭应用时出错（可忽略）: {e}")
-        except Exception as e:
-            logger.error(f"清理资源时出错: {e}")
-        
-        logger.info("机器人已关闭")
-    
-    def stop(self):
-        """停止机器人"""
-        self.running = False
-
-
+# ==================== 主函数 - 极简版 ====================
 async def main():
-    """主函数"""
-    runner = BotRunner()
+    """主函数 - 确保永远不退出"""
+    logger.info("🚀 启动红包系统...")
     
-    # 设置信号处理
-    def signal_handler():
-        logger.info("收到停止信号")
-        runner.stop()
+    # 创建应用
+    app = Application.builder().token(BOT_TOKEN).build()
     
-    # 在非Windows系统上设置信号处理
-    if sys.platform != 'win32':
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, signal_handler)
+    # 添加处理器
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^add_account$")],
+        states={
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_phone)],
+            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_code)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_password)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
     
-    try:
-        await runner.start()
-    except KeyboardInterrupt:
-        logger.info("收到键盘中断")
-        runner.stop()
-    except Exception as e:
-        logger.error(f"主程序错误: {e}")
-    finally:
-        # 确保所有任务都被取消
-        for task in asyncio.all_tasks():
-            if task is not asyncio.current_task():
-                task.cancel()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(conv_handler)
+    
+    # 启动自动登录
+    asyncio.create_task(manager.auto_login_all())
+    
+    # 启动机器人
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    logger.info("✅ 机器人已启动")
+    
+    # 无限循环，永不退出
+    while True:
+        await asyncio.sleep(10)
+        # 每10秒打印一个心跳，证明还在运行
+        logger.debug(f"心跳 - 在线账号: {len(manager.clients)}")
 
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("🚀 启动红包控制系统...")
-    print(f"📱 目标群ID: {TARGET_GROUP_ID}")
-    print(f"🤖 机器人Token: {BOT_TOKEN[:10]}...")
-    print(f"👤 管理员ID: {YOUR_USER_ID}")
+    print("🚀 启动红包控制系统")
+    print(f"目标群: {TARGET_GROUP_ID}")
     print("=" * 50)
-    
-    # 检查配置
-    if not USER_API_ID or USER_API_ID == 0:
-        print("❌ 错误: USER_API_ID 未设置")
-        sys.exit(1)
-    if not USER_API_HASH:
-        print("❌ 错误: USER_API_HASH 未设置")
-        sys.exit(1)
-    if not BOT_TOKEN:
-        print("❌ 错误: BOT_TOKEN 未设置")
-        sys.exit(1)
-    if not YOUR_USER_ID or YOUR_USER_ID == 0:
-        print("❌ 错误: YOUR_USER_ID 未设置")
-        sys.exit(1)
-    
-    print("✅ 配置检查通过")
     
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 程序已停止")
+        print("\n👋 程序停止")
     except Exception as e:
-        print(f"❌ 程序崩溃: {e}")
+        print(f"❌ 错误: {e}")
+        # 防止立即退出
+        import time
+        time.sleep(5)
