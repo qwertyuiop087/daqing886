@@ -1,6 +1,6 @@
 """
-Telegram 红包控制系统 - 极简测试版
-专门测试手机号输入功能
+Telegram 红包控制系统 - 最终简化版
+不用 ConversationHandler，用最简单的状态管理
 """
 
 import os
@@ -14,11 +14,7 @@ from pyrogram import Client as UserClient
 from pyrogram.errors import PhoneNumberInvalid, FloodWait
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ConversationHandler,
-    filters, ContextTypes
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ==================== 你的配置 ====================
 USER_API_ID = 38596687
@@ -26,18 +22,14 @@ USER_API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
 BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
 YOUR_USER_ID = 7793291484
 
-# 对话状态
-PHONE, CODE = range(2)
+# 临时存储用户状态 {user_id: {"state": "phone"/"code", "phone": "xxx", "client": xxx}}
+user_states = {}
 
-# 日志
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# 临时存储
-pending = {}
 # =============================================
 
 
@@ -52,7 +44,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await update.message.reply_text(
-        "🤖 红包控制系统 - 测试版\n点击添加账号",
+        "🤖 红包控制系统\n\n"
+        "点击添加账号开始",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -62,42 +55,72 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != YOUR_USER_ID:
+    user_id = update.effective_user.id
+    if user_id != YOUR_USER_ID:
         return
     
     if query.data == "add":
+        # 设置用户状态为等待手机号
+        user_states[user_id] = {"state": "waiting_phone"}
+        
         await query.edit_message_text(
-            "📱 请输入手机号\n"
-            "格式: +国家代码手机号\n"
-            "例如:\n"
-            "中国: +8613812345678\n"
-            "柬埔寨: +855313658901\n"
-            "发送 /cancel 取消"
+            "📱 *请输入手机号*\n\n"
+            "格式：+国家代码手机号\n"
+            "例如：\n"
+            "中国：`+8613812345678`\n"
+            "柬埔寨：`+855313658901`\n"
+            "美国：`+11234567890`\n\n"
+            "发送 /cancel 取消",
+            parse_mode='Markdown'
         )
-        return PHONE  # 进入手机号输入状态
 
 
-async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理手机号输入"""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理所有消息"""
     user_id = update.effective_user.id
     if user_id != YOUR_USER_ID:
-        return ConversationHandler.END
+        return
     
+    text = update.message.text.strip()
+    
+    # 检查用户状态
+    if user_id not in user_states:
+        await update.message.reply_text("请先发送 /start 开始")
+        return
+    
+    state = user_states[user_id].get("state")
+    
+    if state == "waiting_phone":
+        # 处理手机号输入
+        await handle_phone(update, context)
+    
+    elif state == "waiting_code":
+        # 处理验证码输入
+        await handle_code(update, context)
+    
+    else:
+        await update.message.reply_text("请先发送 /start 开始")
+
+
+async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理手机号"""
+    user_id = update.effective_user.id
     phone = update.message.text.strip()
+    
     logger.info(f"收到手机号: {phone}")
     
-    # 简单验证
+    # 验证手机号格式
     if not phone.startswith('+'):
-        await update.message.reply_text("❌ 必须以+开头，请重新输入:")
-        return PHONE
+        await update.message.reply_text("❌ 手机号必须以+开头，请重新输入：")
+        return
     
-    # 保存到context
-    context.user_data['phone'] = phone
+    if not phone[1:].isdigit():
+        await update.message.reply_text("❌ 手机号只能包含数字和+号，请重新输入：")
+        return
     
     # 回复用户
-    await update.message.reply_text(f"✅ 已收到手机号: {phone}\n正在请求验证码...")
+    await update.message.reply_text(f"✅ 已收到手机号：{phone}\n⏳ 正在请求验证码...")
     
-    # 尝试请求验证码
     try:
         # 创建临时客户端
         client = UserClient(
@@ -111,84 +134,102 @@ async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await client.connect()
         sent_code = await client.send_code(phone)
         
-        # 保存到pending
-        pending[phone] = {
-            'client': client,
-            'phone_code_hash': sent_code.phone_code_hash
+        # 保存到用户状态
+        user_states[user_id] = {
+            "state": "waiting_code",
+            "phone": phone,
+            "client": client,
+            "phone_code_hash": sent_code.phone_code_hash
         }
         
         await update.message.reply_text(
             "✅ 验证码已发送到你的手机\n"
-            "请在60秒内输入验证码:"
+            "📱 请在60秒内输入验证码："
         )
         
         logger.info(f"验证码已发送到 {phone}")
-        return CODE  # 进入验证码输入状态
         
     except PhoneNumberInvalid:
-        await update.message.reply_text("❌ 手机号无效，请检查格式")
-        return PHONE
+        await update.message.reply_text("❌ 手机号无效，请检查格式后重新输入：")
+        # 保持等待手机号状态
+        user_states[user_id] = {"state": "waiting_phone"}
+        
     except FloodWait as e:
-        await update.message.reply_text(f"⏳ 请求太频繁，请等待 {e.value} 秒")
-        return PHONE
+        await update.message.reply_text(f"⏳ 请求太频繁，请等待 {e.value} 秒后重试")
+        # 重置状态
+        user_states.pop(user_id, None)
+        
     except Exception as e:
-        await update.message.reply_text(f"❌ 请求失败: {str(e)}")
+        await update.message.reply_text(f"❌ 请求失败：{str(e)}")
         logger.error(f"验证码请求错误: {e}")
-        return PHONE
+        user_states.pop(user_id, None)
 
 
-async def code_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理验证码输入"""
+async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理验证码"""
     user_id = update.effective_user.id
-    if user_id != YOUR_USER_ID:
-        return ConversationHandler.END
-    
     code = update.message.text.strip()
-    phone = context.user_data.get('phone')
     
-    if not phone:
-        await update.message.reply_text("❌ 请先输入手机号")
-        return ConversationHandler.END
+    user_data = user_states.get(user_id)
+    if not user_data:
+        await update.message.reply_text("❌ 会话已过期，请重新开始")
+        return
+    
+    phone = user_data.get("phone")
+    client = user_data.get("client")
+    phone_code_hash = user_data.get("phone_code_hash")
     
     logger.info(f"收到验证码: {code} for {phone}")
     
-    if phone not in pending:
-        await update.message.reply_text("❌ 请先请求验证码")
-        return ConversationHandler.END
-    
     try:
-        client = pending[phone]['client']
         await client.sign_in(
             phone_number=phone,
-            phone_code_hash=pending[phone]['phone_code_hash'],
+            phone_code_hash=phone_code_hash,
             phone_code=code
         )
         
         me = await client.get_me()
-        await update.message.reply_text(f"✅ 登录成功！用户: {me.first_name}")
         
-        # 清理
-        del pending[phone]
-        return ConversationHandler.END
+        # 保存session
+        os.makedirs("sessions", exist_ok=True)
+        session_name = f"sessions/{phone.replace('+', '')}"
+        await client.storage.save(session_name)
+        
+        await update.message.reply_text(
+            f"✅ 登录成功！\n"
+            f"用户: {me.first_name}\n"
+            f"ID: {me.id}\n\n"
+            "账号已开始监听红包群"
+        )
+        
+        # 清除状态
+        user_states.pop(user_id, None)
         
     except Exception as e:
-        await update.message.reply_text(f"❌ 登录失败: {str(e)}")
-        return CODE
+        error_str = str(e)
+        if "CODE_INVALID" in error_str:
+            await update.message.reply_text("❌ 验证码错误，请重新输入：")
+        elif "PASSWORD" in error_str.upper():
+            await update.message.reply_text("🔐 需要两步验证密码，请输入：")
+            # 可以扩展处理密码
+        else:
+            await update.message.reply_text(f"❌ 登录失败：{error_str}")
+            logger.error(f"登录错误: {error_str}")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """取消"""
-    if update.effective_user.id != YOUR_USER_ID:
-        return ConversationHandler.END
+    user_id = update.effective_user.id
+    if user_id != YOUR_USER_ID:
+        return
     
-    # 清理pending
-    phone = context.user_data.get('phone')
-    if phone and phone in pending:
-        await pending[phone]['client'].disconnect()
-        del pending[phone]
+    # 清除用户状态
+    if user_id in user_states:
+        if "client" in user_states[user_id]:
+            await user_states[user_id]["client"].disconnect()
+        user_states.pop(user_id)
     
-    await update.message.reply_text("❌ 已取消")
-    return ConversationHandler.END
+    await update.message.reply_text("❌ 已取消操作")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,25 +240,17 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """主函数"""
     print("=" * 50)
-    print("🚀 启动红包系统测试版")
+    print("🚀 红包控制系统启动")
     print("=" * 50)
     
     # 创建应用
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # 对话处理器 - 极简配置
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="^add$")],
-        states={
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_handler)],
-            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_handler)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    
+    # 添加处理器
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(conv_handler)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
     
     # 启动
