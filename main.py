@@ -1,5 +1,5 @@
 """
-Telegram 红包控制系统 - Render稳定版
+Telegram 红包控制系统 - Python 3.14 兼容版
 """
 
 import os
@@ -11,7 +11,37 @@ import sys
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 
-# ==================== 基础配置 ====================
+# ==================== Python 3.14 兼容性修复 ====================
+# 必须在导入任何异步库之前设置事件循环
+if sys.version_info >= (3, 14):
+    try:
+        # 尝试获取当前事件循环
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # 如果没有，创建一个新的
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # 设置事件循环策略
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+# ================================================================
+
+from pyrogram import Client as UserClient
+from pyrogram.types import Message as UserMessage
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import (
+    PhoneNumberInvalid, PhoneCodeInvalid, 
+    PasswordHashInvalid, FloodWait
+)
+
+from telegram import Update, InlineKeyboardButton as TGBotton, InlineKeyboardMarkup as TGMarkup
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ConversationHandler,
+    filters, ContextTypes
+)
+
+# ==================== 你的配置 ====================
 USER_API_ID = 38596687
 USER_API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
 BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
@@ -31,18 +61,6 @@ logger = logging.getLogger(__name__)
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 # =============================================
-
-# 延迟导入，确保环境就绪
-from pyrogram import Client as UserClient
-from pyrogram.types import Message as UserMessage, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import PhoneNumberInvalid, PhoneCodeInvalid, PasswordHashInvalid, FloodWait
-
-from telegram import Update, InlineKeyboardButton as TGBotton, InlineKeyboardMarkup as TGMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ConversationHandler,
-    filters, ContextTypes
-)
 
 
 class RedPacketManager:
@@ -331,10 +349,18 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ==================== 主函数 - 极简版 ====================
+# ==================== 主函数 ====================
 async def main():
-    """主函数 - 确保永远不退出"""
+    """主函数"""
     logger.info("🚀 启动红包系统...")
+    
+    # 再次确保事件循环存在（Python 3.14+）
+    if sys.version_info >= (3, 14):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
     
     # 创建应用
     app = Application.builder().token(BOT_TOKEN).build()
@@ -364,10 +390,9 @@ async def main():
     
     logger.info("✅ 机器人已启动")
     
-    # 无限循环，永不退出
+    # 无限循环
     while True:
         await asyncio.sleep(10)
-        # 每10秒打印一个心跳，证明还在运行
         logger.debug(f"心跳 - 在线账号: {len(manager.clients)}")
 
 
@@ -377,12 +402,19 @@ if __name__ == "__main__":
     print(f"目标群: {TARGET_GROUP_ID}")
     print("=" * 50)
     
+    # Python 3.14+ 兼容性修复
+    if sys.version_info >= (3, 14):
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        except:
+            pass
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 程序停止")
     except Exception as e:
         print(f"❌ 错误: {e}")
-        # 防止立即退出
         import time
         time.sleep(5)
