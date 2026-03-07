@@ -1,8 +1,8 @@
-# 解决 Application 导入失败：用旧版 python-telegram-bot
+# 固定版本，消除所有兼容问题
 python-telegram-bot==12.8
-# Pyrogram 稳定版 + 可选加速库
 pyrogram==2.0.106
-TgCrypto==1.2.5
-# 其他依赖
+# 可选：安装 TgCrypto 加速（不装也能用）
+# TgCrypto==1.2.5
+aiohttp==3.9.1
 asyncio
-aiohttp
+threading
