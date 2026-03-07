@@ -6,25 +6,28 @@ from pyrogram import Client
 from pyrogram.errors import (
     PhoneNumberInvalid, FloodWait, PhoneCodeInvalid, SessionPasswordNeeded
 )
+# 适配 python-telegram-bot 12.8 旧版 API
+import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ConversationHandler, filters, ContextTypes
+    Updater, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ConversationHandler, Filters, CallbackContext
 )
 
-# ==================== 配置（Render 可直接用） ====================
+# ==================== 你的配置（只改这里） ====================
 API_ID = 38596687
 API_HASH = "3a2d98dee0760aa201e6e5414dbc5b4d"
 BOT_TOKEN = "7750611624:AAEmZzAPDli5mhUrHQsvO7zNmZk61yloUD0"
 ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
-# ================================================================
+# ==============================================================
 
 PHONE, CODE, PASS = range(3)
 ACCOUNTS = "accounts.json"
 SESSIONS = "sessions"
 os.makedirs(SESSIONS, exist_ok=True)
 
+# 加载/保存账号
 def load_accounts():
     if os.path.exists(ACCOUNTS):
         with open(ACCOUNTS, 'r', encoding='utf-8') as f:
@@ -90,82 +93,94 @@ async def watch_redpacket(client):
     while True:
         await asyncio.sleep(1)
 
-# 机器人命令
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 机器人命令（适配旧版 API）
+def start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return
-    await update.message.reply_text(
+    update.message.reply_text(
         "🤖 Render 红包系统",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ 添加账号", callback_data="add_account")]
         ])
     )
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def button_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     if query.data == "add_account":
-        await query.edit_message_text("📱 输入手机号（格式：+86138xxxx）")
+        query.edit_message_text("📱 输入手机号（格式：+86138xxxx）")
         return PHONE
 
-async def input_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def input_phone(update: Update, context: CallbackContext):
     phone = update.message.text.strip()
     if not phone.startswith("+"):
-        await update.message.reply_text("❌ 格式错误，必须 + 开头")
+        update.message.reply_text("❌ 格式错误，必须 + 开头")
         return PHONE
     context.user_data["phone"] = phone
-    ok, msg = await send_verification_code(phone)
-    await update.message.reply_text(msg)
+    # 同步执行异步函数（适配旧版 telegram-bot）
+    loop = asyncio.get_event_loop()
+    ok, msg = loop.run_until_complete(send_verification_code(phone))
+    update.message.reply_text(msg)
     return CODE if ok else ConversationHandler.END
 
-async def input_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def input_code(update: Update, context: CallbackContext):
     code = update.message.text.strip()
     phone = context.user_data["phone"]
-    ok, msg = await login_account(phone, code)
+    loop = asyncio.get_event_loop()
+    ok, msg = loop.run_until_complete(login_account(phone, code))
     if msg == "need_password":
         context.user_data["code"] = code
-        await update.message.reply_text("🔐 输入两步验证密码")
+        update.message.reply_text("🔐 输入两步验证密码")
         return PASS
-    await update.message.reply_text(msg)
+    update.message.reply_text(msg)
     if ok:
-        asyncio.create_task(watch_redpacket(clients[phone]))
+        loop.create_task(watch_redpacket(clients[phone]))
     return ConversationHandler.END
 
-async def input_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def input_password(update: Update, context: CallbackContext):
     pwd = update.message.text.strip()
     phone = context.user_data["phone"]
     code = context.user_data["code"]
-    ok, msg = await login_account(phone, code, pwd)
-    await update.message.reply_text(msg)
+    loop = asyncio.get_event_loop()
+    ok, msg = loop.run_until_complete(login_account(phone, code, pwd))
+    update.message.reply_text(msg)
     if ok:
-        asyncio.create_task(watch_redpacket(clients[phone]))
+        loop.create_task(watch_redpacket(clients[phone]))
     return ConversationHandler.END
 
 # Render 保活（防止掉线）
-async def keep_alive():
+def keep_alive():
     while True:
-        await asyncio.sleep(300)
+        asyncio.sleep(300)
 
 # 主程序
-async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+def main():
+    # 初始化机器人（旧版 API）
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    # 对话处理器
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_callback, pattern="add_account")],
         states={
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_phone)],
-            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_code)],
-            PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_password)],
+            PHONE: [MessageHandler(Filters.text & ~Filters.command, input_phone)],
+            CODE: [MessageHandler(Filters.text & ~Filters.command, input_code)],
+            PASS: [MessageHandler(Filters.text & ~Filters.command, input_password)],
         },
         fallbacks=[]
     )
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    asyncio.create_task(keep_alive())
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    while True:
-        await asyncio.sleep(100)
+
+    # 添加处理器
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(conv_handler)
+
+    # 启动保活
+    loop = asyncio.get_event_loop()
+    loop.create_task(keep_alive())
+
+    # 启动机器人
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
