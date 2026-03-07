@@ -24,10 +24,12 @@ ADMIN_ID = 7793291484
 GROUP_ID = -1003472034414
 # ==================================================
 
-# 关键修复：强制输出刷新 + 禁用控制台交互
+# 关键修复：强制输出刷新 + 禁用控制台交互 + 消除 TgCrypto 警告
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PYROGRAM_NO_TGCRYPTO"] = "1"
 os.environ["PYROGRAM_DISABLE_TELETHON"] = "1"
+# 额外消除 TgCrypto 警告的配置
+os.environ["PYROGRAM_WARN_NO_TGCRYPTO"] = "0"
 
 # 对话状态
 PHONE, CODE, PASS, DELETE = range(4)
@@ -83,9 +85,9 @@ def save_accounts():
         log(f"保存账号失败：{e}")
 
 def log(content):
-    """日志（实时输出）"""
+    """日志（修复 flush 参数错误）"""
     log_str = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {content}"
-    print(log_str, flush=True)  # 强制刷新输出
+    print(log_str, flush=True)  # flush 放在 print 里，不是 log 函数参数
     try:
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(log_str + "\n")
@@ -258,7 +260,7 @@ def remove_account(phone):
 def start(update: Update, context: CallbackContext):
     """启动命令（秒回）"""
     if update.effective_user.id != ADMIN_ID:
-        update.message.reply_text("❌ 无操作权限", flush=True)
+        update.message.reply_text("❌ 无操作权限")
         return
     
     keyboard = [
@@ -271,8 +273,7 @@ def start(update: Update, context: CallbackContext):
         f"🤖 红包机器人（完整版）\n"
         f"📅 当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"📱 在线账号：{len([p for p in accounts if accounts[p]['status'] == 'active'])}/{len(accounts)}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        flush=True  # 强制发送
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 def button_callback(update: Update, context: CallbackContext):
@@ -282,13 +283,13 @@ def button_callback(update: Update, context: CallbackContext):
     
     # 添加账号
     if query.data == "add_account":
-        query.edit_message_text("📱 请输入手机号（格式：+8613800000000）", flush=True)
+        query.edit_message_text("📱 请输入手机号（格式：+8613800000000）")
         return PHONE
     
     # 账号列表
     elif query.data == "list_accounts":
         if not accounts:
-            query.edit_message_text("📭 暂无账号", flush=True)
+            query.edit_message_text("📭 暂无账号")
             return
         
         text = "📋 账号列表：\n\n"
@@ -301,12 +302,12 @@ def button_callback(update: Update, context: CallbackContext):
             [InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")],
             [InlineKeyboardButton("🗑️ 删除账号", callback_data="delete_account")]
         ]
-        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), flush=True)
+        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     # 抢包统计
     elif query.data == "show_stats":
         if not accounts:
-            query.edit_message_text("📭 暂无统计数据", flush=True)
+            query.edit_message_text("📭 暂无统计数据")
             return
         
         text = "📊 抢红包统计：\n\n"
@@ -326,7 +327,7 @@ def button_callback(update: Update, context: CallbackContext):
         text += f"   总尝试：{total_attempts} | 成功：{total_success} | 成功率：{total_rate}%"
         
         keyboard = [[InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")]]
-        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), flush=True)
+        query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     # 清理日志
     elif query.data == "clear_log":
@@ -334,7 +335,7 @@ def button_callback(update: Update, context: CallbackContext):
             open(LOG_FILE, 'w').close()
         query.edit_message_text("✅ 日志已清空", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")]
-        ]), flush=True)
+        ]))
     
     # 返回主菜单
     elif query.data == "back_main":
@@ -348,13 +349,12 @@ def button_callback(update: Update, context: CallbackContext):
             f"🤖 红包机器人（完整版）\n"
             f"📅 当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📱 在线账号：{len([p for p in accounts if accounts[p]['status'] == 'active'])}/{len(accounts)}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            flush=True
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     # 删除账号
     elif query.data == "delete_account":
-        query.edit_message_text("📱 请输入要删除的手机号（格式：+8613800000000）", flush=True)
+        query.edit_message_text("📱 请输入要删除的手机号（格式：+8613800000000）")
         context.user_data["action"] = "delete"
         return PHONE
 
@@ -367,21 +367,21 @@ def input_phone(update: Update, context: CallbackContext):
     if action == "delete":
         if phone in accounts:
             remove_account(phone)
-            update.message.reply_text(f"✅ 账号 {phone} 已删除", flush=True)
+            update.message.reply_text(f"✅ 账号 {phone} 已删除")
         else:
-            update.message.reply_text(f"❌ 账号 {phone} 不存在", flush=True)
+            update.message.reply_text(f"❌ 账号 {phone} 不存在")
         context.user_data.pop("action", None)
         return ConversationHandler.END
     
     # 添加账号
     if not phone.startswith("+"):
-        update.message.reply_text("❌ 格式错误！手机号必须以 + 开头（如 +8613800000000）", flush=True)
+        update.message.reply_text("❌ 格式错误！手机号必须以 + 开头（如 +8613800000000）")
         return PHONE
     
     context.user_data["phone"] = phone
     # 同步执行，确保响应
     ok, msg = loop.run_until_complete(send_verification_code(phone))
-    update.message.reply_text(msg, flush=True)  # 强制发送回复
+    update.message.reply_text(msg)  # 强制发送回复
     return CODE if ok else ConversationHandler.END
 
 def input_code(update: Update, context: CallbackContext):
@@ -390,16 +390,16 @@ def input_code(update: Update, context: CallbackContext):
     phone = context.user_data.get("phone")
     
     if not phone:
-        update.message.reply_text("❌ 未检测到手机号，请重新开始", flush=True)
+        update.message.reply_text("❌ 未检测到手机号，请重新开始")
         return ConversationHandler.END
     
     ok, msg = loop.run_until_complete(login_account(phone, code))
     if msg == "need_password":
         context.user_data["code"] = code
-        update.message.reply_text("🔐 请输入两步验证密码", flush=True)
+        update.message.reply_text("🔐 请输入两步验证密码")
         return PASS
     
-    update.message.reply_text(msg, flush=True)
+    update.message.reply_text(msg)
     if ok:
         tasks[phone] = loop.create_task(watch_redpacket(phone))
         loop.create_task(auto_reconnect(phone))
@@ -413,11 +413,11 @@ def input_password(update: Update, context: CallbackContext):
     code = context.user_data.get("code")
     
     if not phone or not code:
-        update.message.reply_text("❌ 信息丢失，请重新开始", flush=True)
+        update.message.reply_text("❌ 信息丢失，请重新开始")
         return ConversationHandler.END
     
     ok, msg = loop.run_until_complete(login_account(phone, code, pwd))
-    update.message.reply_text(msg, flush=True)
+    update.message.reply_text(msg)
     if ok:
         tasks[phone] = loop.create_task(watch_redpacket(phone))
         loop.create_task(auto_reconnect(phone))
@@ -433,7 +433,7 @@ def keep_alive():
 def main():
     """主程序（修复启动）"""
     load_accounts()
-    log("✅ 机器人启动中...", flush=True)
+    log("✅ 机器人启动中...")
     
     # 启动保活线程
     threading.Thread(target=keep_alive, daemon=True).start()
@@ -466,7 +466,7 @@ def main():
         drop_pending_updates=True,
         clean=True
     )
-    log("✅ 机器人已启动，等待指令...", flush=True)
+    log("✅ 机器人已启动，等待指令...")
     updater.idle()
 
 if __name__ == "__main__":
