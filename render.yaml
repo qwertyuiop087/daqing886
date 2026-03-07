@@ -1,15 +1,19 @@
 services:
   - type: web
-    name: telegram-redpacket-bot
+    name: telegram-redpacket-control
     runtime: python
     region: singapore
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    startCommand: python main.py
     envVars:
-      - key: API_ID
+      - key: USER_API_ID
         sync: false
-      - key: API_HASH
+      - key: USER_API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: YOUR_USER_ID
         sync: false
       - key: PYTHON_VERSION
         value: 3.10.12
