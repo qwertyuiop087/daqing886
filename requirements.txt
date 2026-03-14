@@ -1,5 +1,0 @@
-# 核心依赖：纯 Python 版本，绝对不编译
-aiogram==2.21
-httpx==0.24.1
-flask==2.2.3
-gunicorn==20.1.0
