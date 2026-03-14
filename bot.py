@@ -9,7 +9,7 @@ import config
 import database
 import okpay
 
-# 配置日志（方便 Render 查看）
+# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def buy(call: types.CallbackQuery):
     else:
         await call.message.answer("支付创建失败，请稍后重试")
 
-# 管理员导入卡密（复用函数减少重复代码）
+# 管理员导入卡密（通用函数）
 async def add_cards_by_price(msg: types.Message, price: int):
     if msg.from_user.id != config.ADMIN_ID:
         return
@@ -68,7 +68,7 @@ async def add30(msg: types.Message):
 async def add50(msg: types.Message):
     await add_cards_by_price(msg, 50)
 
-# （可选）添加库存查询命令
+# 可选：管理员查询库存
 @dp.message_handler(commands=["stock"])
 async def check_stock(msg: types.Message):
     if msg.from_user.id != config.ADMIN_ID:
@@ -84,7 +84,6 @@ async def on_startup(_):
     logger.info("数据库初始化完成")
 
 async def main():
-    # 注册启动回调
     dp.startup.register(on_startup)
     logger.info("开始轮询...")
     await dp.start_polling(bot)
