@@ -1,5 +1,5 @@
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiogram import executor
 import requests
 import uuid
 from database import init_db, add_card
