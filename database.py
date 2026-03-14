@@ -1,42 +1,60 @@
 import sqlite3
-DB = "cards.db"
+import os
 
-def init():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS cards
-                 (price INT, card TEXT UNIQUE, status INT)''')
-    conn.commit()
-    conn.close()
+# 从环境变量获取数据库路径，默认当前目录下的 database.db
+DB_PATH = os.environ.get("DATABASE_PATH", "database.db")
 
-def add(price, card):
-    try:
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-        c.execute("INSERT INTO cards VALUES (?,?,0)", (price, card))
+def get_connection():
+    """获取数据库连接（确保每次调用都是新连接，避免多线程问题）"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # 可选，便于按列名访问
+    return conn
+
+def init_db():
+    """初始化数据库表（启动时调用一次）"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cards(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            price INTEGER,
+            card TEXT,
+            status INTEGER
+        )
+        """)
         conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
 
-def get(price):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT card FROM cards WHERE price=? AND status=0 LIMIT 1", (price,))
-    res = c.fetchone()
-    if res:
-        c.execute("UPDATE cards SET status=1 WHERE card=?", (res[0],))
+def add_card(price, card):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO cards(price, card, status) VALUES (?, ?, 0)",
+            (price, card)
+        )
         conn.commit()
-        conn.close()
-        return res[0]
-    conn.close()
+
+def get_card(price):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, card FROM cards WHERE price = ? AND status = 0 LIMIT 1",
+            (price,)
+        )
+        row = cursor.fetchone()
+        if row:
+            cursor.execute(
+                "UPDATE cards SET status = 1 WHERE id = ?",
+                (row[0],)
+            )
+            conn.commit()
+            return row[1]
     return None
 
 def stock(price):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM cards WHERE price=? AND status=0", (price,))
-    cnt = c.fetchone()[0]
-    conn.close()
-    return cnt
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM cards WHERE price = ? AND status = 0",
+            (price,)
+        )
+        return cursor.fetchone()[0]
