@@ -19,11 +19,10 @@ def create_order(order_id, amount):
         r = requests.post(
             "https://okpay.com/api/deposit",
             json=data,
-            timeout=10  # 添加超时，避免卡死
+            timeout=10
         )
         r.raise_for_status()
         return r.json()
     except requests.exceptions.RequestException as e:
-        # 打印错误日志（实际应使用 logging）
         print(f"OKPay 请求失败: {e}")
         return {"error": "请求失败"}
