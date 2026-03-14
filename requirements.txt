@@ -1,4 +1,5 @@
 aiogram==2.25.1
-flask
-requests
-gunicorn
+aiohttp==3.8.6
+flask==2.3.2
+requests==2.31.0
+gunicorn==21.2.0
