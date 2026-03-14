@@ -3,20 +3,27 @@ import requests
 import config
 
 def sign(data):
-    s = sorted(data.items())
-    text = "&".join(f"{k}={v}" for k, v in s) + config.SHOP_TOKEN
+    text = "&".join(f"{k}={v}" for k, v in data.items())
+    text += config.SHOP_TOKEN
     return hashlib.md5(text.encode()).hexdigest()
 
-def pay_link(order_id, usdt):
+def create_order(order_id, amount):
     data = {
         "shopId": config.SHOP_ID,
         "orderId": order_id,
-        "amount": round(usdt, 2),
+        "amount": amount,
         "coin": "USDT"
     }
     data["sign"] = sign(data)
     try:
-        r = requests.post(config.PAY_API, json=data, timeout=10)
-        return r.json()["data"]["payLink"]
-    except:
-        return None
+        r = requests.post(
+            "https://okpay.com/api/deposit",
+            json=data,
+            timeout=10  # 添加超时，避免卡死
+        )
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        # 打印错误日志（实际应使用 logging）
+        print(f"OKPay 请求失败: {e}")
+        return {"error": "请求失败"}
