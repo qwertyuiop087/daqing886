@@ -1,1 +1,5 @@
+# Telegram机器人核心依赖
+aiogram>=3.10.0
+# 之前用到的网络请求依赖
 requests>=2.31.0
+aiohttp>=3.9.0
