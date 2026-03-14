@@ -4,19 +4,18 @@ from aiogram.utils.exceptions import BotBlocked
 from database import get_card
 import os
 
-BOT_TOKEN = os.getenv("7750611624:AAGihlmQtN9QQqx_fhZlsKqLh85rS0AoWWY", "你的Token")
+BOT_TOKEN = os.getenv("7750611624:AAGihlmQtN9QQqx_fhZlsKqLh85rS0AoWWY", "你的机器人Token")
 bot = Bot(token=BOT_TOKEN)
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot Running"
+    return "Bot Server Running"
 
 @app.route("/callback", methods=["POST"])
 def callback():
     status = request.form.get("status")
     user = request.form.get("pay_user_id")
-
     if status == "1" and user:
         card = get_card()
         if card:
@@ -26,7 +25,7 @@ def callback():
             except BotBlocked:
                 pass
             except Exception as e:
-                print(e)
+                print("回调发送消息失败:", e)
     return "success"
 
 if __name__ == "__main__":
