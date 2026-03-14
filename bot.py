@@ -4,8 +4,8 @@ import requests
 import uuid
 from database import init_db,add_card
 
-BOT_TOKEN="你的BOT_TOKEN"
-ADMIN_ID=你的TGID
+BOT_TOKEN="7750611624:AAGihlmQtN9QQqx_fhZlsKqLh85rS0AoWWY"
+ADMIN_ID=7793291484
 
 SHOP_ID="29681"
 CALLBACK="https://daqing886.onrender.com/callback"
