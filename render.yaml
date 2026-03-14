@@ -1,6 +1,6 @@
-services:
-  - type: web
-    name: tg-card-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: bash start.sh
+services: 
+  - type: web 
+    name: tg-card-bot 
+    runtime: python 
+    buildCommand: pip install -r requirements.txt 
+    startCommand: python bot.py # 不再需要 bash start.sh
