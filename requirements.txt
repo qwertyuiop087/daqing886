@@ -1,4 +1,8 @@
+# 1. 指定使用无需编译的稳定版
 aiogram==2.21
-aiohttp==3.8.5
 flask==2.2.3
 gunicorn==20.1.0
+
+# 2. 关键：强制指定 aiohttp 版本为预编译版（避开高版本编译问题）
+# 这里指定 3.8.5 版本，它在 Render 环境上有现成的二进制包，不用编译
+aiohttp==3.8.5 --only-binary :all:
