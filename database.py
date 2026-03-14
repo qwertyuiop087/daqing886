@@ -1,17 +1,17 @@
 import sqlite3
 import os
 
-# 从环境变量获取数据库路径，默认当前目录下的 database.db
+# 数据库文件路径，可通过环境变量 DATABASE_PATH 覆盖，默认当前目录下的 database.db
 DB_PATH = os.environ.get("DATABASE_PATH", "database.db")
 
 def get_connection():
-    """获取数据库连接（确保每次调用都是新连接，避免多线程问题）"""
+    """获取数据库连接（每次调用新连接，避免多线程问题）"""
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # 可选，便于按列名访问
+    conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """初始化数据库表（启动时调用一次）"""
+    """初始化数据库表（启动时调用）"""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
