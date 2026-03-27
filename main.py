@@ -9,8 +9,8 @@ from telebot import TeleBot, types
 from flask import Flask
 
 # ====================== 你的配置 ======================
-BOT_TOKEN = "你的机器人TOKEN"
-ADMIN_ID = 123456789
+BOT_TOKEN = "8511432045:AAGjwjpk_VHUeNH4hsNX3DVNdTmfV2NoA3A"
+ADMIN_ID = 7793291484
 # ======================================================
 
 PORT = int(os.environ.get("PORT", 10000))
