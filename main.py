@@ -27,7 +27,7 @@ def get_user(user_id):
     """获取/初始化用户信息"""
     if user_id not in users:
         users[user_id] = {
-            "balance": 10,
+            "balance": 0,
             "mode": "TXT",
             "split_lines": 100,
             "username": f"用户{user_id}"
