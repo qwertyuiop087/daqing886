@@ -24,12 +24,11 @@ app = Flask(__name__)
 def health_check():
     return "Bot Running ✅", 200
 
-# 初始化机器人：添加单例锁+超时配置
+# 初始化机器人：移除旧版本不支持的参数，保证兼容
 bot = TeleBot(
     BOT_TOKEN,
     parse_mode="HTML",
-    skip_pending=True,  # 跳过待处理的更新
-    timeout=30          # 超时时间，避免卡死
+    skip_pending=True  # 跳过待处理的更新（关键：解决多实例冲突）
 )
 
 # 数据存储
@@ -425,9 +424,8 @@ def run_bot():
     print("🚀 机器人启动中...")
     while bot_running:
         try:
-            # 单实例轮询配置
+            # 单实例轮询配置（兼容旧版本）
             bot.infinity_polling(
-                timeout=30,
                 long_polling_timeout=10,
                 skip_pending=True,
                 restart_on_change=False  # 禁止自动重启
