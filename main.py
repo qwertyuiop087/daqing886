@@ -142,7 +142,7 @@ def callback_handler(call):
             uid = int(act.split("_")[-1])
             if uid in file_session:
                 s = file_session[uid]
-                generate_and_send_files(cid, uid, s, s["filename"])
+                batch_send_files(cid, uid, s, s["filename"])
                 del file_session[uid]
         elif act.startswith("custom_name_"):
             uid = int(act.split("_")[-1])
@@ -189,8 +189,8 @@ def file_upload_handler(msg):
     except Exception as e:
         bot.send_message(cid, f"❌ 错误：{e}")
 
-# ====================== 发送逻辑：10个一批，休息3秒 ======================
-def generate_and_send_files(cid, uid, session, prefix):
+# ====================== 核心修改：批量发送（10个一批） ======================
+def batch_send_files(cid, uid, session, prefix):
     try:
         user = get_user(uid)
         user["balance"] -= session["fee"]
@@ -199,6 +199,7 @@ def generate_and_send_files(cid, uid, session, prefix):
         step = session["split_lines"]
         mode = session["mode"]
 
+        # 生成所有文件
         files = []
         if mode == "TXT":
             lines = content.splitlines()
@@ -217,18 +218,28 @@ def generate_and_send_files(cid, uid, session, prefix):
                 files.append(b)
 
         total = len(files)
-        bot.send_message(cid, f"✅ 已扣费，共{total}个文件，10个一批发送")
+        bot.send_message(cid, f"✅ 已扣费，共{total}个文件，10个一批批量发送")
 
-        # 一次发10个，每批休息3秒
+        # 批量发送核心逻辑：10个一批，一次性发
         batch_size = 10
-        for i in range(0, total, batch_size):
-            batch = files[i:i+batch_size]
-            for f in batch:
-                bot.send_document(cid, f)
-                time.sleep(0.3)
-            # 一批发完，休息3秒
-            if i + batch_size < total:
-                bot.send_message(cid, "⏸ 休息3秒继续发送")
+        for batch_idx in range(0, total, batch_size):
+            # 取当前批次的10个文件
+            current_batch = files[batch_idx:batch_idx+batch_size]
+            # 构建media_group（批量发送对象）
+            media_group = []
+            for file in current_batch:
+                media_group.append(types.InputMediaDocument(file))
+            
+            # 一次性发送整批文件
+            bot.send_media_group(chat_id=cid, media=media_group)
+            
+            # 发送完成提示
+            sent_count = min(batch_idx + batch_size, total)
+            bot.send_message(cid, f"✅ 已发送 {sent_count}/{total} 个文件")
+            
+            # 非最后一批则休息3秒
+            if batch_idx + batch_size < total:
+                bot.send_message(cid, "⏸ 休息3秒继续发送下一批")
                 time.sleep(3)
 
         bot.send_message(cid, f"✅ 全部发送完成！余额：{user['balance']}")
@@ -238,7 +249,7 @@ def generate_and_send_files(cid, uid, session, prefix):
 # ====================== 其他函数 ======================
 def custom_name_handler(msg, uid):
     if uid in file_session:
-        generate_and_send_files(msg.chat.id, uid, file_session[uid], msg.text.strip())
+        batch_send_files(msg.chat.id, uid, file_session[uid], msg.text.strip())
         del file_session[uid]
 
 def set_lines_handler(msg, uid):
