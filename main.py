@@ -7,7 +7,7 @@ from io import BytesIO
 from telebot import TeleBot, types
 
 # ========== 配置（必须改这里！） ==========
-BOT_TOKEN = "8511432045:AAH3vlvLLuSlRkpHyNF5d6uIQPfiCSQzYVs"  # 替换成@BotFather给的token
+BOT_TOKEN = "8511432045:AAGjwjpk_VHUeNH4hsNX3DVNdTmfV2NoA3A"  # 替换成@BotFather给的token
 ADMIN_ID = 7793291484           # 替换成你的TG纯数字ID
 
 # ========== 计费规则配置（可自定义） ==========
