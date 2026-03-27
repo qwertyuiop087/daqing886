@@ -8,10 +8,10 @@ from io import BytesIO
 from telebot import TeleBot, types
 from flask import Flask
 
-# ====================== 你只改这里 ======================
+# ====================== 配置 ======================
 BOT_TOKEN = "8511432045:AAGjwjpk_VHUeNH4hsNX3DVNdTmfV2NoA3A"
-ADMIN_ID = 7793291484  # 你的TG数字ID
-# ======================================================
+ADMIN_ID = 7793291484
+# ==================================================
 
 PORT = int(os.environ.get("PORT", 10000))
 app = Flask(__name__)
@@ -20,7 +20,6 @@ app = Flask(__name__)
 def home():
     return "Bot Running", 200
 
-# 初始化机器人
 bot = TeleBot(BOT_TOKEN)
 
 users = {}
@@ -32,7 +31,7 @@ LAST_NAMES = ["伟", "芳", "强", "磊", "军"]
 
 def get_user(uid):
     if uid not in users:
-        users[uid] = {"balance":0, "mode":"TXT", "split_lines":100}
+        users[uid] = {"balance": 0, "mode": "TXT", "split_lines": 100}
     return users[uid]
 
 def is_admin(uid):
@@ -92,7 +91,7 @@ def start(msg):
     get_user(uid)
     bot.send_message(msg.chat.id, "✅ 机器人已启动\n💸 1万行数据扣费4元", reply_markup=main_menu(uid))
 
-# ====================== 按钮回调 ======================
+# ====================== 按钮回调（全部修好） ======================
 @bot.callback_query_handler(func=lambda call: True)
 def cb(call):
     uid = call.from_user.id
@@ -101,10 +100,13 @@ def cb(call):
     act = call.data
     bot.answer_callback_query(call.id)
 
-    user = get_user(uid)
+    if not is_admin(uid) and act in ["addbal","deductbal","gencard","userlist","broadcast"]:
+        bot.send_message(cid, "❌ 无权限")
+        return
 
     if act == "switch":
-        user['mode'] = "VCF" if user['mode']=="TXT" else "TXT"
+        user = get_user(uid)
+        user['mode'] = "VCF" if user['mode'] == "TXT" else "TXT"
         bot.edit_message_text("✅ 模式已切换", cid, mid, reply_markup=main_menu(uid))
 
     elif act == "setlines":
@@ -112,31 +114,101 @@ def cb(call):
         bot.register_next_step_handler(call.message, lambda m: set_lines(m, uid))
 
     elif act == "balance":
+        user = get_user(uid)
         bot.edit_message_text(f"💰 余额：{user['balance']} 元", cid, mid, reply_markup=main_menu(uid))
 
     elif act == "redeem":
         bot.send_message(cid, "💳 输入卡密：")
         bot.register_next_step_handler(call.message, lambda m: redeem(m, uid))
 
-    elif act == "admin" and is_admin(uid):
+    elif act == "admin":
         bot.edit_message_text("🔧 管理员面板", cid, mid, reply_markup=admin_menu())
 
     elif act == "back":
         bot.edit_message_text("✅ 主菜单", cid, mid, reply_markup=main_menu(uid))
 
+    # ====================== 管理员功能全部修复 ======================
+    elif act == "addbal":
+        bot.send_message(cid, "➕ 格式：用户ID 金额")
+        bot.register_next_step_handler(call.message, add_balance)
+
+    elif act == "deductbal":
+        bot.send_message(cid, "➖ 格式：用户ID 金额")
+        bot.register_next_step_handler(call.message, deduct_balance)
+
+    elif act == "gencard":
+        bot.send_message(cid, "📛 格式：数量 金额")
+        bot.register_next_step_handler(call.message, gen_card)
+
+    elif act == "userlist":
+        txt = "📊 用户列表\n"
+        for u in users:
+            txt += f"{u} → {users[u]['balance']}元\n"
+        bot.send_message(cid, txt)
+
+    elif act == "broadcast":
+        bot.send_message(cid, "📢 输入广播内容：")
+        bot.register_next_step_handler(call.message, broadcast)
+
     elif act == "custom":
         bot.send_message(cid, "✏️ 输入前缀：")
-        bot.register_next_step_handler(call.message, lambda m: go_file(m, uid, custom=True))
+        bot.register_next_step_handler(call.message, lambda m: go_file(m, uid, True))
 
     elif act == "original":
-        go_file(None, uid, custom=False)
+        go_file(None, uid, False)
 
-# ====================== 逻辑 ======================
+# ====================== 管理员函数实现 ======================
+def add_balance(msg):
+    try:
+        uid, amt = msg.text.split()
+        uid = int(uid)
+        amt = int(amt)
+        get_user(uid)['balance'] += amt
+        bot.send_message(msg.chat.id, f"✅ 成功给 {uid} 加 {amt} 元")
+    except:
+        bot.send_message(msg.chat.id, "❌ 格式错误：用户ID 金额")
+
+def deduct_balance(msg):
+    try:
+        uid, amt = msg.text.split()
+        uid = int(uid)
+        amt = int(amt)
+        get_user(uid)['balance'] -= amt
+        bot.send_message(msg.chat.id, f"✅ 成功给 {uid} 扣 {amt} 元")
+    except:
+        bot.send_message(msg.chat.id, "❌ 格式错误：用户ID 金额")
+
+def gen_card(msg):
+    try:
+        cnt, amt = msg.text.split()
+        cnt = int(cnt)
+        amt = int(amt)
+        res = []
+        for i in range(cnt):
+            code = f"Card{random.randint(100000,999999)}"
+            cards[code] = {"used":False, "amount":amt}
+            res.append(f"{code} → {amt}元")
+        bot.send_message(msg.chat.id, "\n".join(res))
+    except:
+        bot.send_message(msg.chat.id, "❌ 格式错误：数量 金额")
+
+def broadcast(msg):
+    text = msg.text
+    ok = 0
+    for u in users:
+        try:
+            bot.send_message(u, f"📢 广播\n{text}")
+            ok +=1
+        except:
+            continue
+    bot.send_message(msg.chat.id, f"✅ 发送完成：{ok} 人")
+
+# ====================== 普通功能 ======================
 def set_lines(msg, uid):
     try:
         n = int(msg.text)
         get_user(uid)['split_lines'] = n
-        bot.send_message(msg.chat.id, f"✅ 已设为 {n} 行", reply_markup=main_menu(uid))
+        bot.send_message(msg.chat.id, f"✅ 已设为 {n} 行")
     except:
         bot.send_message(msg.chat.id, "❌ 输入数字")
 
@@ -146,9 +218,9 @@ def redeem(msg, uid):
     if card in cards and not cards[card]['used']:
         user['balance'] += cards[card]['amount']
         cards[card]['used'] = True
-        bot.send_message(msg.chat.id, "✅ 充值成功", reply_markup=main_menu(uid))
+        bot.send_message(msg.chat.id, "✅ 充值成功")
     else:
-        bot.send_message(msg.chat.id, "❌ 卡密无效", reply_markup=main_menu(uid))
+        bot.send_message(msg.chat.id, "❌ 卡密无效")
 
 # ====================== 文件处理 ======================
 @bot.message_handler(content_types=['document'])
@@ -159,24 +231,20 @@ def on_file(msg):
         f = bot.get_file(msg.document.file_id)
         data = bot.download_file(f.file_path)
         name = msg.document.file_name.rsplit('.',1)[0]
-
         content = ""
         if msg.document.file_name.endswith('.txt'):
-            content = data.decode('utf-8', 'ignore')
+            content = data.decode('utf-8','ignore')
         elif msg.document.file_name.endswith('.zip'):
             with zipfile.ZipFile(BytesIO(data)) as z:
                 for fn in z.namelist():
                     if fn.endswith('.txt'):
                         content += z.read(fn).decode('utf-8','ignore')+'\n'
-
         lines = len(content.splitlines())
         fee = calculate_fee(lines)
-
         if user['balance'] < fee:
             bot.send_message(msg.chat.id, f"❌ 需扣费 {fee} 元，余额不足")
             return
-
-        user_session[uid] = {"c":content, "n":name, "fee":fee}
+        user_session[uid] = {"c":content,"n":name,"fee":fee}
         bot.send_message(msg.chat.id, f"✅ 需扣费 {fee} 元", reply_markup=file_menu())
     except Exception as e:
         bot.send_message(msg.chat.id, f"❌ 错误：{e}")
@@ -186,15 +254,12 @@ def go_file(msg, uid, custom):
     d = user_session[uid]
     del user_session[uid]
     cid = msg.chat.id if msg else None
-
     user = get_user(uid)
     user['balance'] -= d['fee']
-
     prefix = msg.text.strip() if custom else d['n']
     mode = user['mode']
     step = user['split_lines']
     content = d['c']
-
     files = []
     if mode == "TXT":
         lines = content.splitlines()
@@ -211,7 +276,6 @@ def go_file(msg, uid, custom):
             b = BytesIO(vcf.encode())
             b.name = f"{prefix}_{i//step+1}.vcf"
             files.append(b)
-
     if cid:
         bot.send_message(cid, f"✅ 已扣费 {d['fee']} 元")
         for f in files:
@@ -224,5 +288,4 @@ def run_web():
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-    print("✅ 机器人启动")
     bot.infinity_polling(skip_pending=True)
