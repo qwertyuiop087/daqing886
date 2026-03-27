@@ -6,9 +6,12 @@ import time
 from io import BytesIO
 from telebot import TeleBot, types
 
-# ========== 配置（改这里） ==========
-BOT_TOKEN = "8511432045:AAH3vlvLLuSlRkpHyNF5d6uIQPfiCSQzYVs"  # 替换成你的token
-ADMIN_ID = 7793291484        # 替换成你自己的TG ID（纯数字）
+# ========== 配置（必须改这里！） ==========
+BOT_TOKEN = "8511432045:AAH3vlvLLuSlRkpHyNF5d6uIQPfiCSQzYVs"  # 替换成@BotFather给的token
+ADMIN_ID = 7793291484           # 替换成你的TG纯数字ID
+
+# ========== 先初始化bot（核心修复：确保bot变量提前定义） ==========
+bot = TeleBot(BOT_TOKEN)
 
 # ========== 存储 ==========
 users = {}
@@ -24,7 +27,7 @@ def get_user(user_id):
     """获取/初始化用户信息"""
     if user_id not in users:
         users[user_id] = {
-            "balance": 0,
+            "balance": 10,
             "mode": "TXT",
             "split_lines": 100,
             "username": f"用户{user_id}"
@@ -175,7 +178,7 @@ def handle_callback(call):
         else:
             bot.send_message(chat_id, "❌ 无权限！", reply_markup=main_menu(user_id))
     
-    # 9. 管理员：生成卡密（新增自定义金额）
+    # 9. 管理员：生成卡密（自定义金额）
     elif call.data == "gen_card":
         if is_admin(user_id):
             bot.send_message(chat_id, "📛 请输入【数量 金额】（例：5 10 = 生成5个10元卡密）")
@@ -265,7 +268,7 @@ def deduct_balance_handler(msg):
         bot.send_message(msg.chat.id, "❌ 格式错误！例：123456 10", reply_markup=admin_menu())
 
 def gen_card_handler(msg):
-    """生成卡密（核心新增：自定义金额）"""
+    """生成卡密（自定义金额）"""
     try:
         # 解析数量和金额（格式：数量 金额）
         count, amount = msg.text.strip().split()
@@ -416,5 +419,5 @@ END:VCARD
 
 # ---------------------- 启动机器人 ----------------------
 if __name__ == "__main__":
-    print("✅ 机器人已启动（最终版）- 卡密自定义金额+管理员面板+批量发送")
+    print("✅ 机器人已启动（最终修复版）- 无NameError错误")
     bot.infinity_polling(timeout=30, long_polling_timeout=5)
