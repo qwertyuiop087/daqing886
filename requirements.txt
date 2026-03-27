@@ -1,4 +1,0 @@
-aiogram
-flask
-requests
-gunicorn
