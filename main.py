@@ -8,12 +8,11 @@ from telebot import TeleBot, types
 
 # ========== 配置（改这里） ==========
 BOT_TOKEN = "8511432045:AAH3vlvLLuSlRkpHyNF5d6uIQPfiCSQzYVs"  # 替换成你的token
-bot = TeleBot(BOT_TOKEN)
-ADMIN_ID = 7793291484  # 替换成你自己的TG ID（纯数字）
+ADMIN_ID = 7793291484        # 替换成你自己的TG ID（纯数字）
 
 # ========== 存储 ==========
 users = {}
-cards = {}
+cards = {}  # 结构：{卡密: {"used": False, "amount": 金额}}
 user_session = {}
 
 # ========== 随机姓名库 ==========
@@ -25,7 +24,7 @@ def get_user(user_id):
     """获取/初始化用户信息"""
     if user_id not in users:
         users[user_id] = {
-            "balance": 10,
+            "balance": 0,
             "mode": "TXT",
             "split_lines": 100,
             "username": f"用户{user_id}"
@@ -34,19 +33,18 @@ def get_user(user_id):
 
 def is_admin(user_id):
     """判断是否是管理员"""
-    return user_id == ADMIN_ID  # 单管理员模式，更稳定
+    return user_id == ADMIN_ID
 
 def random_name():
     """生成随机中文名"""
     return random.choice(FIRST_NAMES) + random.choice(LAST_NAMES)
 
-# ---------------------- 内联按钮（核心修复） ----------------------
+# ---------------------- 内联按钮 ----------------------
 def main_menu(user_id):
-    """主菜单按钮（修复管理员面板显示）"""
+    """主菜单按钮"""
     user = get_user(user_id)
     kb = types.InlineKeyboardMarkup(row_width=2)
     
-    # 基础功能按钮
     kb.add(
         types.InlineKeyboardButton(f"📂 切换模式（{user['mode']}）", callback_data="switch_mode"),
         types.InlineKeyboardButton(f"📏 分包行数（{user['split_lines']}）", callback_data="set_lines")
@@ -56,21 +54,20 @@ def main_menu(user_id):
         types.InlineKeyboardButton("💳 卡密充值", callback_data="redeem_card")
     )
     
-    # 管理员面板按钮（修复显示逻辑）
     if is_admin(user_id):
         kb.add(types.InlineKeyboardButton("🔧 管理员面板", callback_data="admin_panel"))
     
     return kb
 
 def admin_menu():
-    """管理员面板按钮（修复回调）"""
+    """管理员面板按钮"""
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("➕ 增加余额", callback_data="add_balance"),
         types.InlineKeyboardButton("➖ 扣除余额", callback_data="deduct_balance")
     )
     kb.add(
-        types.InlineKeyboardButton("📛 生成卡密", callback_data="gen_card"),
+        types.InlineKeyboardButton("📛 生成卡密（自定义金额）", callback_data="gen_card"),
         types.InlineKeyboardButton("📊 用户余额列表", callback_data="user_list")
     )
     kb.add(
@@ -100,7 +97,7 @@ def start_bot(msg):
         reply_markup=main_menu(user_id)
     )
 
-# ---------------------- 按钮回调（核心修复） ----------------------
+# ---------------------- 按钮回调 ----------------------
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     """处理所有按钮点击"""
@@ -108,7 +105,6 @@ def handle_callback(call):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
     
-    # 修复：先回应用户点击，避免按钮转圈
     bot.answer_callback_query(call.id)
     
     # 1. 切换模式
@@ -137,12 +133,12 @@ def handle_callback(call):
             reply_markup=main_menu(user_id)
         )
     
-    # 4. 卡密充值
+    # 4. 卡密充值（适配自定义金额）
     elif call.data == "redeem_card":
         bot.send_message(chat_id, "💳 请输入卡密：")
         bot.register_next_step_handler(call.message, redeem_card_handler, user_id)
     
-    # 5. 管理员面板（核心修复：确保能打开）
+    # 5. 管理员面板
     elif call.data == "admin_panel":
         if is_admin(user_id):
             bot.edit_message_text(
@@ -179,10 +175,10 @@ def handle_callback(call):
         else:
             bot.send_message(chat_id, "❌ 无权限！", reply_markup=main_menu(user_id))
     
-    # 9. 管理员：生成卡密
+    # 9. 管理员：生成卡密（新增自定义金额）
     elif call.data == "gen_card":
         if is_admin(user_id):
-            bot.send_message(chat_id, "📛 请输入生成卡密数量：")
+            bot.send_message(chat_id, "📛 请输入【数量 金额】（例：5 10 = 生成5个10元卡密）")
             bot.register_next_step_handler(call.message, gen_card_handler)
         else:
             bot.send_message(chat_id, "❌ 无权限！", reply_markup=main_menu(user_id))
@@ -214,7 +210,6 @@ def handle_callback(call):
     elif call.data == "origin_name":
         if user_id in user_session:
             session = user_session[user_id]
-            # 核心修复：调用批量发送函数
             send_files_batch(chat_id, user_id, session["content"], 
                            session["mode"], session["lines"], session["original_name"])
             del user_session[user_id]
@@ -230,18 +225,26 @@ def set_lines_handler(msg, user_id):
         bot.send_message(msg.chat.id, "❌ 请输入有效数字！", reply_markup=main_menu(user_id))
 
 def redeem_card_handler(msg, user_id):
-    """卡密充值"""
+    """卡密充值（适配自定义金额）"""
     card = msg.text.strip()
     user = get_user(user_id)
+    
+    # 检查卡密是否存在
     if card not in cards:
         bot.send_message(msg.chat.id, "❌ 卡密无效！", reply_markup=main_menu(user_id))
         return
+    
+    # 检查卡密是否已使用
     if cards[card]["used"]:
         bot.send_message(msg.chat.id, "❌ 卡密已使用！", reply_markup=main_menu(user_id))
         return
+    
+    # 充值（使用卡密对应的金额）
+    amount = cards[card]["amount"]
     cards[card]["used"] = True
-    user["balance"] += 1
-    bot.send_message(msg.chat.id, "✅ 充值成功！余额+1", reply_markup=main_menu(user_id))
+    user["balance"] += amount
+    bot.send_message(msg.chat.id, f"✅ 充值成功！余额+{amount}（当前余额：{user['balance']}）", 
+                     reply_markup=main_menu(user_id))
 
 def add_balance_handler(msg):
     """管理员增加余额"""
@@ -262,17 +265,36 @@ def deduct_balance_handler(msg):
         bot.send_message(msg.chat.id, "❌ 格式错误！例：123456 10", reply_markup=admin_menu())
 
 def gen_card_handler(msg):
-    """生成卡密"""
+    """生成卡密（核心新增：自定义金额）"""
     try:
-        count = int(msg.text.strip())
+        # 解析数量和金额（格式：数量 金额）
+        count, amount = msg.text.strip().split()
+        count = int(count)
+        amount = int(amount)
+        
+        # 验证输入有效性
+        if count <= 0 or amount <= 0:
+            bot.send_message(msg.chat.id, "❌ 数量和金额必须大于0！", reply_markup=admin_menu())
+            return
+        
+        # 生成卡密
         card_list = []
         for i in range(count):
-            card = f"CARD_{int(time.time())}_{i}"
-            cards[card] = {"used": False}
-            card_list.append(card)
-        bot.send_message(msg.chat.id, "📛 生成的卡密：\n\n" + "\n".join(card_list), reply_markup=admin_menu())
+            card = f"CARD_{int(time.time())}_{random.randint(1000,9999)}_{i}"  # 增加随机数，避免重复
+            cards[card] = {
+                "used": False,
+                "amount": amount  # 存储卡密对应的金额
+            }
+            card_list.append(f"{card} | 金额：{amount}")
+        
+        # 发送卡密列表
+        bot.send_message(
+            msg.chat.id, 
+            f"📛 生成 {count} 个卡密（每个金额：{amount}）：\n\n" + "\n".join(card_list), 
+            reply_markup=admin_menu()
+        )
     except:
-        bot.send_message(msg.chat.id, "❌ 请输入有效数字！", reply_markup=admin_menu())
+        bot.send_message(msg.chat.id, "❌ 格式错误！例：5 10（生成5个10元卡密）", reply_markup=admin_menu())
 
 def broadcast_handler(msg):
     """全员广播"""
@@ -291,12 +313,11 @@ def custom_name_handler(msg):
     user_id = msg.from_user.id
     if user_id in user_session:
         session = user_session[user_id]
-        # 核心修复：调用批量发送函数
         send_files_batch(msg.chat.id, user_id, session["content"], 
                        session["mode"], session["lines"], msg.text.strip())
         del user_session[user_id]
 
-# ---------------------- 文件处理（核心修复：10个一批发送） ----------------------
+# ---------------------- 文件处理（10个一批发送） ----------------------
 @bot.message_handler(content_types=["document"])
 def handle_file(msg):
     """接收文件并初始化处理"""
@@ -342,7 +363,7 @@ def handle_file(msg):
         bot.send_message(msg.chat.id, f"❌ 文件处理失败：{str(e)}", reply_markup=main_menu(user_id))
 
 def send_files_batch(chat_id, user_id, content, mode, lines, base_name):
-    """核心修复：10个文件一批发送，间隔3秒"""
+    """10个文件一批发送，间隔3秒"""
     user = get_user(user_id)
     user["balance"] -= 1  # 扣除余额
     files = []
@@ -350,7 +371,6 @@ def send_files_batch(chat_id, user_id, content, mode, lines, base_name):
     # 生成分包文件
     if mode == "TXT":
         all_lines = content.splitlines()
-        # 按行数分包
         chunks = [all_lines[i:i+lines] for i in range(0, len(all_lines), lines)]
         for idx, chunk in enumerate(chunks, 1):
             bio = BytesIO("\n".join(chunk).encode("utf-8"))
@@ -361,7 +381,6 @@ def send_files_batch(chat_id, user_id, content, mode, lines, base_name):
         vcf_chunks = []
         current_vcf = ""
         count = 0
-        # 按行数分包（每行1个手机号）
         for phone in phones:
             current_vcf += f"""BEGIN:VCARD
 VERSION:3.0
@@ -376,32 +395,26 @@ END:VCARD
                 count = 0
         if current_vcf:
             vcf_chunks.append(current_vcf)
-        # 生成VCF文件
         for idx, chunk in enumerate(vcf_chunks, 1):
             bio = BytesIO(chunk.encode("utf-8"))
             bio.name = f"{base_name}_{idx}.vcf"
             files.append(bio)
     
-    # 核心修复：10个一批发送，间隔3秒
+    # 分批发送
     bot.send_message(chat_id, f"✅ 共生成 {len(files)} 个文件，开始分批发送...")
-    
-    # 分批处理
-    batch_size = 10  # 每批10个
+    batch_size = 10
     for i in range(0, len(files), batch_size):
         batch = files[i:i+batch_size]
-        # 发送当前批次
         for file in batch:
             bot.send_document(chat_id, file)
-            time.sleep(0.3)  # 单个文件间隔0.3秒，避免风控
-        # 批次之间间隔3秒（最后一批不间隔）
+            time.sleep(0.3)
         if i + batch_size < len(files):
             bot.send_message(chat_id, f"⏳ 第 {i//batch_size + 1} 批发送完成，等待3秒发送下一批...")
             time.sleep(3)
     
-    # 发送完成
     bot.send_message(chat_id, "✅ 所有文件发送完成！", reply_markup=main_menu(user_id))
 
 # ---------------------- 启动机器人 ----------------------
 if __name__ == "__main__":
-    print("✅ 机器人已启动（修复版）- 管理员面板+批量发送")
+    print("✅ 机器人已启动（最终版）- 卡密自定义金额+管理员面板+批量发送")
     bot.infinity_polling(timeout=30, long_polling_timeout=5)
