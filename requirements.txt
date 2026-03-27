@@ -1,1 +1,6 @@
+# 机器人核心依赖
 pyTelegramBotAPI==4.16.1
+# 端口监听/保活依赖
+flask==3.0.0
+# 可选：如果用到requests（比如内置保活）也加上
+requests==2.31.0
