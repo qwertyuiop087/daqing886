@@ -7,13 +7,13 @@ from io import BytesIO
 from telebot import TeleBot, types
 
 # ========== 基础配置 ==========
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8511432045:AAH3vlvLLuSlRkpHyNF5d6uIQPfiCSQzYVs")
 bot = TeleBot(BOT_TOKEN)
 
 # ========== 数据存储 ==========
 users = {}
 cards = {}
-admins = [123456789]  # 改成你自己的 TG ID
+admins = [7793291484]  # 改成你自己的 TG ID
 
 # ========== 随机姓名库 ==========
 FIRST_NAMES = ["李", "王", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴"]
