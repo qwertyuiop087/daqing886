@@ -72,7 +72,7 @@ def start(msg):
     get_user(uid)
     bot.send_message(msg.chat.id, "✅ 机器人已启动", reply_markup=main_menu(uid))
 
-# ====================== 统一按钮回调 ======================
+# ====================== 统一按钮回调（绝对稳定） ======================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_all(call):
     try:
@@ -124,6 +124,7 @@ def handle_all(call):
             bot.send_message(cid,"📥 格式：\nID 金额\nID 金额")
             bot.register_next_step_handler(call.message,batch_add_balance)
 
+        # 自定义名称
         elif act == "custom":
             if uid not in user_file:
                 bot.send_message(cid, "❌ 请先上传文件")
@@ -133,6 +134,7 @@ def handle_all(call):
             del user_file[uid]
             bot.register_next_step_handler(call.message, lambda m: go(m, uid, data, m.text))
             
+        # 原文件名（修复：点了立刻发）
         elif act == "original":
             if uid not in user_file:
                 bot.send_message(cid, "❌ 请先上传文件")
@@ -142,7 +144,8 @@ def handle_all(call):
             go(None, uid, data, data['n'])
             
     except Exception as e:
-        print(e)
+        print(f"按钮错误: {e}")
+        bot.send_message(call.message.chat.id, "❌ 操作失败，请重试")
 
 # ====================== 功能 ======================
 def set_lines(m,uid):
