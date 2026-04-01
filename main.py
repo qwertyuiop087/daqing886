@@ -134,7 +134,7 @@ def handle_all(call):
             del user_file[uid]
             bot.register_next_step_handler(call.message, lambda m: go(m, uid, data, m.text))
             
-        # 原文件名（修复：点了立刻发）
+        # 原文件名（彻底修复：点了立刻发）
         elif act == "original":
             if uid not in user_file:
                 bot.send_message(cid, "❌ 请先上传文件")
