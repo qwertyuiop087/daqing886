@@ -3,20 +3,19 @@ import re
 import zipfile
 import random
 import time
-import threading
 from io import BytesIO
 from telebot import TeleBot, types
 
-# ====================== 配置 ======================
+# ====================== 你的配置 ======================
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 7793291484
-# ==================================================
+# ======================================================
 
 user_file = {}
 users = {}
 cards = {}
 
-# ====================== 基础函数 ======================
+# ====================== 基础 ======================
 def get_user(uid):
     if uid not in users:
         users[uid] = {"balance": 0, "mode": "TXT", "split_lines": 100}
@@ -63,7 +62,7 @@ def admin_menu():
     kb.add(types.InlineKeyboardButton("📥 批量加余额", callback_data="batch_add_bal"))
     return kb
 
-# ====================== 按钮回调 ======================
+# ====================== 机器人 ======================
 bot = TeleBot(BOT_TOKEN, skip_pending=True)
 
 @bot.message_handler(commands=['start'])
@@ -194,7 +193,6 @@ def broadcast(msg):
             pass
     bot.send_message(msg.chat.id, f"✅ 发送完成 {ok} 人")
 
-# ✅ 批量加余额（你要的功能 100% 完整）
 def batch_add_balance(msg):
     lines = msg.text.strip().splitlines()
     success = 0
@@ -208,7 +206,7 @@ def batch_add_balance(msg):
             fail +=1
     bot.send_message(msg.chat.id, f"✅ 批量完成：成功 {success} 人，失败 {fail} 人")
 
-# ====================== 文件处理 ======================
+# ====================== 文件处理（已修复空行！） ======================
 @bot.message_handler(content_types=['document'])
 def on_file(msg):
     uid = msg.from_user.id
@@ -228,10 +226,16 @@ def on_file(msg):
             with zipfile.ZipFile(BytesIO(data)) as z:
                 for fn in z.namelist():
                     if fn.endswith('.txt'):
-                        content += z.read(fn).decode('utf-8','ignore')+'\n'
+                        content += z.read(fn).decode('utf-8','ignore')
 
-        lines = len(content.splitlines())
-        fee = (lines + 9999) // 10000 * 4
+        # ====================== ✅ 这里彻底删除空行、空格 ======================
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        content = "\n".join(lines)
+        # ====================================================================
+
+        lines_count = len(lines)
+        fee = (lines_count + 9999) // 10000 * 4
+
         if user['balance'] < fee:
             bot.send_message(msg.chat.id, f"❌ 需 {fee} 元，余额不足")
             return
@@ -277,10 +281,12 @@ def go_send(msg, uid, s, prefix):
         mode = user['mode']
         files = []
 
+        lines = content.splitlines()
+
         if mode == "TXT":
-            lines = content.splitlines()
             for i in range(0, len(lines), step):
-                b = BytesIO("\n".join(lines[i:i+step]).encode())
+                chunk = lines[i:i+step]
+                b = BytesIO("\n".join(chunk).encode())
                 b.name = f"{prefix}_{i//step+1}.txt"
                 files.append(b)
         else:
@@ -311,5 +317,5 @@ def go_send(msg, uid, s, prefix):
 
 # ====================== 启动 ======================
 if __name__ == "__main__":
-    print("✅ 机器人启动中...")
+    print("✅ 机器人启动...")
     bot.infinity_polling()
