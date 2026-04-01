@@ -4,7 +4,9 @@ import zipfile
 import random
 import time
 import traceback
+import threading
 from io import BytesIO
+from flask import Flask
 from telebot import TeleBot, types
 from requests.exceptions import ReadTimeout, ConnectionError
 
@@ -13,6 +15,7 @@ BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 7793291484
 # ======================================================
 
+# 全局数据
 user_file = {}
 users = {}
 cards = {}
@@ -147,7 +150,7 @@ def handle_all(call):
         print(f"按钮错误: {e}")
         bot.send_message(call.message.chat.id, "❌ 操作失败，请重试")
 
-# ====================== 功能 ======================
+# ====================== 功能函数 ======================
 def set_lines(m,uid):
     try:
         get_user(uid)['split_lines']=int(m.text)
@@ -301,19 +304,33 @@ def go(cid, uid, s, p):
     except Exception as e:
         bot.send_message(cid, f"❌ 发送失败：{e}")
 
-# ====================== 核心：无限重启 + 超时自动恢复 ======================
+# ====================== 机器人运行（自动重启） ======================
 def run_bot():
     while True:
         try:
             print("✅ 机器人启动成功")
-            # 超时时间设为 60 秒，避免被 Render 踢掉
             bot.infinity_polling(timeout=60, long_polling_timeout=30)
         except (ReadTimeout, ConnectionError, Exception) as e:
-            print(f"超时/网络错误：{e}")
+            print(f"网络错误：{e}")
             traceback.print_exc()
             time.sleep(10)
             continue
 
+# ====================== 核心：端口监听（解决Render端口检测） ======================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot Running", 200
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    print(f"✅ 端口监听: 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
+
 # ====================== 启动 ======================
 if __name__ == "__main__":
-    run_bot()
+    # 后台线程跑机器人
+    threading.Thread(target=run_bot, daemon=True).start()
+    # 主线程跑端口监听，Render扫端口直接能扫到
+    run_web()
