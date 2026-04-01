@@ -15,7 +15,7 @@ user_file = {}
 users = {}
 cards = {}
 
-# ====================== 基础 ======================
+# ====================== 基础函数 ======================
 def get_user(uid):
     if uid not in users:
         users[uid] = {"balance": 0, "mode": "TXT", "split_lines": 100}
@@ -62,17 +62,19 @@ def admin_menu():
     kb.add(types.InlineKeyboardButton("📥 批量加余额", callback_data="batch_add_bal"))
     return kb
 
-# ====================== 机器人 ======================
+# ====================== 机器人初始化 ======================
 bot = TeleBot(BOT_TOKEN)
 
+# ====================== 启动命令 ======================
 @bot.message_handler(commands=['start'])
 def start(msg):
     uid = msg.from_user.id
     get_user(uid)
     bot.send_message(msg.chat.id, "✅ 机器人已启动", reply_markup=main_menu(uid))
 
+# ====================== 统一按钮回调（不卡死） ======================
 @bot.callback_query_handler(func=lambda call: True)
-def cb(call):
+def handle_all(call):
     try:
         uid = call.from_user.id
         cid = call.message.chat.id
@@ -80,239 +82,202 @@ def cb(call):
         act = call.data
         bot.answer_callback_query(call.id)
 
-        if not is_admin(uid) and act in ["addbal","deductbal","gencard","userlist","broadcast","batch_add_bal"]:
+        # 权限拦截
+        admin_list = ["addbal","deductbal","gencard","userlist","broadcast","batch_add_bal"]
+        if not is_admin(uid) and act in admin_list:
             bot.send_message(cid, "❌ 无权限")
             return
 
+        # 主菜单
         if act == "switch_mode":
-            user = get_user(uid)
-            user['mode'] = "VCF" if user['mode'] == "TXT" else "TXT"
-            bot.edit_message_text("✅ 模式已切换", cid, mid, reply_markup=main_menu(uid))
-
+            u = get_user(uid)
+            u['mode'] = "VCF" if u['mode']=="TXT" else "TXT"
+            bot.edit_message_text("✅ 模式已切换",cid,mid,reply_markup=main_menu(uid))
         elif act == "set_lines":
-            bot.send_message(cid, "✏️ 输入每个文件行数：")
-            bot.register_next_step_handler(call.message, lambda m: set_lines(m, uid))
-
+            bot.send_message(cid,"✏️ 输入行数：")
+            bot.register_next_step_handler(call.message,lambda m:set_lines(m,uid))
         elif act == "balance":
-            user = get_user(uid)
-            bot.edit_message_text(f"💰 余额：{user['balance']} 元", cid, mid, reply_markup=main_menu(uid))
-
+            bot.edit_message_text(f"💰 余额：{get_user(uid)['balance']}",cid,mid,reply_markup=main_menu(uid))
         elif act == "redeem":
-            bot.send_message(cid, "💳 输入卡密：")
-            bot.register_next_step_handler(call.message, lambda m: redeem(m, uid))
-
+            bot.send_message(cid,"💳 输入卡密：")
+            bot.register_next_step_handler(call.message,lambda m:redeem(m,uid))
         elif act == "admin":
-            bot.edit_message_text("🔧 管理员面板", cid, mid, reply_markup=admin_menu())
-
+            bot.edit_message_text("🔧 管理面板",cid,mid,reply_markup=admin_menu())
         elif act == "back":
-            bot.edit_message_text("✅ 主菜单", cid, mid, reply_markup=main_menu(uid))
+            bot.edit_message_text("✅ 主菜单",cid,mid,reply_markup=main_menu(uid))
 
+        # 管理功能
         elif act == "addbal":
-            bot.send_message(cid, "➕ 格式：用户ID 金额")
-            bot.register_next_step_handler(call.message, add_balance)
-
+            bot.send_message(cid,"➕ ID 金额")
+            bot.register_next_step_handler(call.message,add_balance)
         elif act == "deductbal":
-            bot.send_message(cid, "➖ 格式：用户ID 金额")
-            bot.register_next_step_handler(call.message, deduct_balance)
-
+            bot.send_message(cid,"➖ ID 金额")
+            bot.register_next_step_handler(call.message,deduct_balance)
         elif act == "gencard":
-            bot.send_message(cid, "📛 格式：数量 金额")
-            bot.register_next_step_handler(call.message, gen_card)
-
+            bot.send_message(cid,"📛 数量 金额")
+            bot.register_next_step_handler(call.message,gen_card)
         elif act == "userlist":
-            txt = "📊 用户列表\n"
-            for u in users:
-                txt += f"{u} → {users[u]['balance']}元\n"
-            bot.send_message(cid, txt)
-
+            txt = "📊 用户\n"
+            for i in users: txt+=f"{i} → {users[i]['balance']}元\n"
+            bot.send_message(cid,txt)
         elif act == "broadcast":
-            bot.send_message(cid, "📢 输入广播内容：")
-            bot.register_next_step_handler(call.message, broadcast)
-
+            bot.send_message(cid,"📢 输入内容：")
+            bot.register_next_step_handler(call.message,broadcast)
         elif act == "batch_add_bal":
-            bot.send_message(cid, "📥 格式：\n用户ID 金额\n用户ID 金额")
-            bot.register_next_step_handler(call.message, batch_add_balance)
+            bot.send_message(cid,"📥 格式：\nID 金额\nID 金额")
+            bot.register_next_step_handler(call.message,batch_add_balance)
 
-    except Exception as e:
-        print(e)
+        # 文件按钮（核心修复）
+        elif act == "custom":
+            if uid in user_file:
+                bot.send_message(cid,"✏️ 前缀：")
+                bot.register_next_step_handler(call.message,lambda m:go(m,uid,user_file[uid],m.text))
+                del user_file[uid]
+        elif act == "original":
+            if uid in user_file:
+                go(None,uid,user_file[uid],user_file[uid]['n'])
+                del user_file[uid]
+    except:
+        pass
 
 # ====================== 功能 ======================
-def set_lines(msg, uid):
+def set_lines(m,uid):
     try:
-        n = int(msg.text)
-        get_user(uid)['split_lines'] = n
-        bot.send_message(msg.chat.id, f"✅ 已设为 {n} 行")
+        get_user(uid)['split_lines']=int(m.text)
+        bot.send_message(m.chat.id,"✅ 已设置")
     except:
-        bot.send_message(msg.chat.id, "❌ 输入数字")
+        bot.send_message(m.chat.id,"❌ 数字")
 
-def redeem(msg, uid):
-    card = msg.text.strip()
-    user = get_user(uid)
-    if card in cards and not cards[card]['used']:
-        user['balance'] += cards[card]['amount']
-        cards[card]['used'] = True
-        bot.send_message(msg.chat.id, "✅ 充值成功")
+def redeem(m,uid):
+    c=m.text.strip()
+    if c in cards and not cards[c]['used']:
+        get_user(uid)['balance']+=cards[c]['amount']
+        cards[c]['used']=True
+        bot.send_message(m.chat.id,"✅ 成功")
     else:
-        bot.send_message(msg.chat.id, "❌ 卡密无效")
+        bot.send_message(m.chat.id,"❌ 无效")
 
-def add_balance(msg):
+def add_balance(m):
     try:
-        uid, amt = msg.text.split()
-        get_user(int(uid))['balance'] += int(amt)
-        bot.send_message(msg.chat.id, "✅ 成功")
+        i,a=m.text.split()
+        get_user(int(i))['balance']+=int(a)
+        bot.send_message(m.chat.id,"✅ 成功")
     except:
-        bot.send_message(msg.chat.id, "❌ 格式错误")
+        bot.send_message(m.chat.id,"❌ 格式")
 
-def deduct_balance(msg):
+def deduct_balance(m):
     try:
-        uid, amt = msg.text.split()
-        get_user(int(uid))['balance'] -= int(amt)
-        bot.send_message(msg.chat.id, "✅ 成功")
+        i,a=m.text.split()
+        get_user(int(i))['balance']-=int(a)
+        bot.send_message(m.chat.id,"✅ 成功")
     except:
-        bot.send_message(msg.chat.id, "❌ 格式错误")
+        bot.send_message(m.chat.id,"❌ 格式")
 
-def gen_card(msg):
+def gen_card(m):
     try:
-        cnt, amt = msg.text.split()
-        res = []
-        for i in range(int(cnt)):
-            code = f"Card{random.randint(100000,999999)}"
-            cards[code] = {"used":False, "amount":int(amt)}
-            res.append(code)
-        bot.send_message(msg.chat.id, "\n".join(res))
+        c,a=m.text.split()
+        l=[]
+        for i in range(int(c)):
+            k=f"Card{random.randint(100000,999999)}"
+            cards[k]={'used':0,'amount':int(a)}
+            l.append(k)
+        bot.send_message(m.chat.id,"\n".join(l))
     except:
-        bot.send_message(msg.chat.id, "❌ 格式错误")
+        bot.send_message(m.chat.id,"❌ 格式")
 
-def broadcast(msg):
-    ok = 0
-    for u in users:
+def broadcast(m):
+    t=0
+    for i in users:
         try:
-            bot.send_message(u, f"📢 广播\n{msg.text}")
-            ok +=1
+            bot.send_message(i,f"📢 广播\n{m.text}")
+            t+=1
         except:
             pass
-    bot.send_message(msg.chat.id, f"✅ 发送完成 {ok} 人")
+    bot.send_message(m.chat.id,f"✅ 发送 {t} 人")
 
-def batch_add_balance(msg):
-    lines = msg.text.strip().splitlines()
-    success = 0
-    fail = 0
-    for line in lines:
+def batch_add_balance(m):
+    s,f=0,0
+    for line in m.text.strip().splitlines():
         try:
-            uid, amt = line.split()
-            get_user(int(uid))['balance'] += int(amt)
-            success +=1
+            i,a=line.split()
+            get_user(int(i))['balance']+=int(a)
+            s+=1
         except:
-            fail +=1
-    bot.send_message(msg.chat.id, f"✅ 批量完成：成功 {success} 人，失败 {fail} 人")
+            f+=1
+    bot.send_message(m.chat.id,f"✅ 成功{s} 失败{f}")
 
-# ====================== 文件处理（已修复 z 错误） ======================
+# ====================== 文件处理（无空行、不卡死） ======================
 @bot.message_handler(content_types=['document'])
-def on_file(msg):
-    uid = msg.from_user.id
-    user = get_user(uid)
+def file(msg):
     try:
-        if uid in user_file:
-            del user_file[uid]
-
-        f = bot.get_file(msg.document.file_id)
-        data = bot.download_file(f.file_path)
-        name = msg.document.file_name.rsplit('.',1)[0]
-        content = ""
-
+        uid=msg.from_user.id
+        u=get_user(uid)
+        if uid in user_file: del user_file[uid]
+        f=bot.get_file(msg.document.file_id)
+        d=bot.download_file(f.file_path)
+        n=msg.document.file_name.rsplit('.',1)[0]
+        c=""
         if msg.document.file_name.endswith('.txt'):
-            content = data.decode('utf-8','ignore')
+            c=d.decode('utf-8','ignore')
         elif msg.document.file_name.endswith('.zip'):
-            with zipfile.ZipFile(BytesIO(data)) as zf:
+            with zipfile.ZipFile(BytesIO(d)) as zf:
                 for fn in zf.namelist():
                     if fn.endswith('.txt'):
-                        content += zf.read(fn).decode('utf-8','ignore')
-
+                        c+=zf.read(fn).decode('utf-8','ignore')
         # 清理空行
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        content = "\n".join(lines)
-        lines_count = len(lines)
-        fee = (lines_count + 9999) // 10000 * 4
-
-        if user['balance'] < fee:
-            bot.send_message(msg.chat.id, f"❌ 需 {fee} 元，余额不足")
+        lines=[x.strip() for x in c.splitlines() if x.strip()]
+        c="\n".join(lines)
+        fee=(len(lines)+9999)//10000*4
+        if u['balance']<fee:
+            bot.send_message(msg.chat.id,f"❌ 需{fee}元")
             return
-
-        user_file[uid] = {"c":content,"n":name,"fee":fee}
-        kb = types.InlineKeyboardMarkup(row_width=2)
+        user_file[uid]={'c':c,'n':n,'fee':fee}
+        kb=types.InlineKeyboardMarkup(row_width=2)
         kb.add(
-            types.InlineKeyboardButton("自定义名称", callback_data="custom"),
-            types.InlineKeyboardButton("原文件名", callback_data="original")
+            types.InlineKeyboardButton("自定义",callback_data="custom"),
+            types.InlineKeyboardButton("原名",callback_data="original")
         )
-        bot.send_message(msg.chat.id, f"✅ 需扣费 {fee} 元", reply_markup=kb)
-
+        bot.send_message(msg.chat.id,f"✅ 扣{fee}元",reply_markup=kb)
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ 文件处理失败：{str(e)}")
-        print(f"错误：{e}")
+        bot.send_message(msg.chat.id,f"❌ 错误：{e}")
 
-@bot.callback_query_handler(func=lambda call: call.data in ["custom","original"])
-def file_choice(call):
-    uid = call.from_user.id
-    cid = call.message.chat.id
-    bot.answer_callback_query(call.id)
-
-    if uid not in user_file:
-        bot.send_message(cid, "❌ 请先上传文件")
-        return
-
-    s = user_file[uid]
-    del user_file[uid]
-
-    if call.data == "custom":
-        bot.send_message(cid, "✏️ 输入前缀：")
-        bot.register_next_step_handler(call.message, lambda m: go_send(m, uid, s, m.text.strip()))
-    else:
-        go_send(None, uid, s, s["n"])
-
-def go_send(msg, uid, s, prefix):
-    cid = msg.chat.id if msg else None
+# 发送文件
+def go(m,uid,s,p):
+    cid=m.chat.id if m else None
     try:
-        user = get_user(uid)
-        user['balance'] -= s['fee']
-
-        content = s['c']
-        step = user['split_lines']
-        mode = user['mode']
-        files = []
-
-        if mode == "TXT":
-            lines = content.splitlines()
-            for i in range(0, len(lines), step):
-                chunk = lines[i:i+step]
-                b = BytesIO("\n".join(chunk).encode())
-                b.name = f"{prefix}_{i//step+1}.txt"
+        u=get_user(uid)
+        u['balance']-=s['fee']
+        con=s['c']
+        step=u['split_lines']
+        mode=u['mode']
+        files=[]
+        if mode=="TXT":
+            ls=con.splitlines()
+            for i in range(0,len(ls),step):
+                b=BytesIO("\n".join(ls[i:i+step]).encode())
+                b.name=f"{p}_{i//step+1}.txt"
                 files.append(b)
         else:
-            phones = re.findall(r"1[3-9]\d{9}", content)
-            for i in range(0, len(phones), step):
-                vcf = ""
-                for p in phones[i:i+step]:
-                    vcf += f"BEGIN:VCARD\nFN:{random_name()}\nTEL:{p}\nEND:VCARD\n"
-                b = BytesIO(vcf.encode())
-                b.name = f"{prefix}_{i//step+1}.vcf"
+            ps=re.findall(r"1[3-9]\d{9}",con)
+            for i in range(0,len(ps),step):
+                v=""
+                for pn in ps[i:i+step]:
+                    v+=f"BEGIN:VCARD\nFN:{random_name()}\nTEL:{pn}\nEND:VCARD\n"
+                b=BytesIO(v.encode())
+                b.name=f"{p}_{i//step+1}.vcf"
                 files.append(b)
-
-        total = len(files)
-        bot.send_message(cid, f"✅ 共 {total} 个，10个一批发送")
-
-        batch_size = 10
-        for i in range(0, total, batch_size):
-            batch = files[i:i+batch_size]
-            for f in batch:
-                bot.send_document(cid, f)
+        total=len(files)
+        bot.send_message(cid,f"✅ {total}个，10个一批")
+        for i in range(0,total,10):
+            for fi in files[i:i+10]:
+                bot.send_document(cid,fi)
                 time.sleep(0.2)
-            if i + batch_size < total:
-                time.sleep(3)
-
-        bot.send_message(cid, f"✅ 发送完成！余额：{user['balance']}")
+            time.sleep(3)
+        bot.send_message(cid,f"✅ 完成！余额：{u['balance']}")
     except Exception as e:
-        bot.send_message(cid, f"❌ 失败：{e}")
+        bot.send_message(cid,f"❌ 失败：{e}")
 
-# ====================== 启动 ======================
+# ====================== 启动（不卡住） ======================
 if __name__ == "__main__":
-    bot.polling(none_stop=True)
+    print("✅ 机器人启动...")
+    bot.polling(timeout=10)
