@@ -12,7 +12,7 @@ from requests.exceptions import ReadTimeout, ConnectionError
 
 # ====================== 你的配置 ======================
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
-ADMIN_ID = 7793291484
+ADMIN_ID = 6042965834
 # ======================================================
 
 # 全局数据
