@@ -216,7 +216,7 @@ def batch_add_balance(m):
             f+=1
     bot.send_message(m.chat.id,f"✅ 成功{s} 失败{f}")
 
-# ====================== 文件处理（核心：支持 ZIP 和 7Z） ======================
+# ====================== 文件处理 ======================
 @bot.message_handler(content_types=['document'])
 def file(msg):
     try:
@@ -229,7 +229,6 @@ def file(msg):
         n=msg.document.file_name.rsplit('.',1)[0]
         c=""
         
-        # 支持 ZIP 和 7Z
         if msg.document.file_name.endswith('.txt'):
             c=d.decode('utf-8','ignore')
         elif msg.document.file_name.endswith('.zip'):
@@ -237,29 +236,7 @@ def file(msg):
                 for fn in zf.namelist():
                     if fn.endswith('.txt'):
                         c+=zf.read(fn).decode('utf-8','ignore')
-        elif msg.document.file_name.endswith('.7z'):
-            try:
-                import py7zr
-                with py7zr.SevenZipFile(BytesIO(d), mode='r') as szf:
-                    # 提取所有文件到内存
-                    files = szf.getnames()
-                    for fn in files:
-                        if fn.endswith('.txt'):
-                            # 读取文件内容
-                            with szf.open(fn) as fp:
-                                c+=fp.read().decode('utf-8','ignore')
-            except ImportError:
-                # 如果没安装库，提示安装
-                bot.send_message(msg.chat.id,"❌ 解压 7Z 需要安装依赖，请联系管理员更新")
-                return
-            except Exception as e:
-                bot.send_message(msg.chat.id,f"❌ 7Z解压失败: {e}")
-                return
-        else:
-            bot.send_message(msg.chat.id,"❌ 不支持的格式，请上传 TXT、ZIP 或 7Z")
-            return
                         
-        # 清理空行
         lines=[x.strip() for x in c.splitlines() if x.strip()]
         c="\n".join(lines)
         fee=(len(lines)+9999)//10000*4
@@ -270,7 +247,6 @@ def file(msg):
             
         user_file[uid]={'c':c,'n':n,'fee':fee}
         
-        # 发送按钮
         kb=types.InlineKeyboardMarkup(row_width=2)
         kb.add(
             types.InlineKeyboardButton("自定义名称",callback_data="custom"),
