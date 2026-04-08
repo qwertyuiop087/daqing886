@@ -1,2 +1,6 @@
-pytelegrambotpy
-flask
+# 机器人核心依赖
+pyTelegramBotAPI==4.16.1
+# Flask端口监听
+flask==3.0.0
+# 可选：如果需要requests（比如内置保活）
+requests==2.31.0
