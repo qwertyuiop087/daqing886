@@ -20,6 +20,9 @@ user_file = {}
 users = {}
 cards = {}
 
+# 合并功能临时存储
+merge_temp = {}
+
 # ====================== 基础函数 ======================
 def get_user(uid):
     if uid not in users:
@@ -45,6 +48,11 @@ def main_menu(uid):
     kb.add(
         types.InlineKeyboardButton("💰 余额", callback_data="balance"),
         types.InlineKeyboardButton("💳 充值", callback_data="redeem")
+    )
+    # 新增功能按钮
+    kb.add(
+        types.InlineKeyboardButton("📎 合并Txt", callback_data="merge_txt"),
+        types.InlineKeyboardButton("🧹 号码去重", callback_data="deduplicate")
     )
     if is_admin(uid):
         kb.add(types.InlineKeyboardButton("🔧 管理", callback_data="admin"))
@@ -108,6 +116,13 @@ def handle_all(call):
             bot.edit_message_text("🔧 管理面板",cid,mid,reply_markup=admin_menu())
         elif act == "back":
             bot.edit_message_text("✅ 主菜单",cid,mid,reply_markup=main_menu(uid))
+
+        # ====== 新增功能 ======
+        elif act == "merge_txt":
+            merge_temp[uid] = []
+            bot.send_message(cid, "📎 请依次发送需要合并的 TXT 文件\n发送完毕后回复：完成")
+        elif act == "deduplicate":
+            bot.send_message(cid, "🧹 请发送需要去重的号码 TXT 文件")
 
         elif act == "addbal":
             bot.send_message(cid,"➕ ID 金额")
@@ -216,9 +231,108 @@ def batch_add_balance(m):
             f+=1
     bot.send_message(m.chat.id,f"✅ 成功{s} 失败{f}")
 
-# ====================== 文件处理 ======================
+# ====================== 合并 TXT 功能 ======================
+@bot.message_handler(func=lambda m: m.from_user.id in merge_temp and m.text and m.text.strip() == "完成")
+def merge_finish(msg):
+    uid = msg.from_user.id
+    cid = msg.chat.id
+    if uid not in merge_temp or len(merge_temp[uid]) == 0:
+        bot.send_message(cid, "❌ 未收集到任何文件")
+        return
+
+    all_lines = []
+    for content in merge_temp[uid]:
+        lines = [x.strip() for x in content.splitlines() if x.strip()]
+        all_lines.extend(lines)
+
+    total = len(all_lines)
+    fee =(total + 9999) // 10000 * 2
+
+    user = get_user(uid)
+    if user['balance'] < fee:
+        bot.send_message(cid, f"❌ 合并需 {fee} 元，余额不足")
+        del merge_temp[uid]
+        return
+
+    # 扣费
+    user['balance'] -= fee
+
+    # 生成文件
+    out_content = "\n".join(all_lines)
+    bio = BytesIO(out_content.encode('utf-8'))
+    bio.name = f"{total}.txt"
+
+    bot.send_document(cid, bio, caption=f"✅ 文件合并成功！\n总行数：{total}\n扣费：{fee} 元\n剩余余额：{user['balance']}")
+    del merge_temp[uid]
+
+# ====================== 号码去重功能 ======================
 @bot.message_handler(content_types=['document'])
-def file(msg):
+def handle_file(msg):
+    uid = msg.from_user.id
+    cid = msg.chat.id
+    try:
+        # 先处理原有分割功能
+        if uid not in merge_temp:
+            file_process(msg)
+            return
+
+        # 处理合并收集
+        if not msg.document.file_name.endswith('.txt'):
+            bot.send_message(cid, "❌ 仅支持 TXT 文件")
+            return
+
+        file_info = bot.get_file(msg.document.file_id)
+        data = bot.download_file(file_info.file_path)
+        text = data.decode('utf-8', 'ignore')
+        merge_temp[uid].append(text)
+        bot.send_message(cid, f"✅ 已接收第 {len(merge_temp[uid])} 个文件\n继续发送或回复：完成")
+
+    except Exception as e:
+        bot.send_message(cid, f"❌ 处理失败：{e}")
+
+# ====================== 去重处理 ======================
+@bot.message_handler(content_types=['document'], func=lambda m: m.document.file_name.endswith('.txt'))
+def dedup_process(msg):
+    uid = msg.from_user.id
+    cid = msg.chat.id
+    user = get_user(uid)
+
+    try:
+        file_info = bot.get_file(msg.document.file_id)
+        data = bot.download_file(file_info.file_path)
+        text = data.decode('utf-8', 'ignore')
+
+        # 提取手机号
+        phones = re.findall(r"1[3-9]\d{9}", text)
+        total_raw = len(phones)
+
+        # 去重
+        unique_phones = sorted(list(set(phones)))
+        total_unique = len(unique_phones)
+
+        # 计费：1万行1元
+        fee =(total_raw + 9999) // 10000 * 1
+
+        if user['balance'] < fee:
+            bot.send_message(cid, f"❌ 去重需 {fee} 元，余额不足")
+            return
+
+        user['balance'] -= fee
+
+        out_content = "\n".join(unique_phones)
+        bio = BytesIO(out_content.encode('utf-8'))
+        bio.name = f"去重_{total_unique}.txt"
+
+        bot.send_document(
+            cid, bio,
+            caption=f"✅ 去重完成！\n原行数：{total_raw}\n去重后：{total_unique}\n扣费：{fee} 元\n余额：{user['balance']}"
+        )
+
+    except Exception as e:
+        bot.send_message(cid, f"❌ 去重失败：{e}")
+
+# ====================== 原有文件处理 ======================
+def file_process(msg):
     try:
         uid=msg.from_user.id
         u=get_user(uid)
@@ -330,7 +444,5 @@ def run_web():
 
 # ====================== 启动 ======================
 if __name__ == "__main__":
-    # 后台线程跑机器人
     threading.Thread(target=run_bot, daemon=True).start()
-    # 主线程跑端口监听，Render扫端口直接能扫到
     run_web()
