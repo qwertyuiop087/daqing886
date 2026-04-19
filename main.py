@@ -279,18 +279,58 @@ def merge_finish(msg):
     del merge_temp[uid]
     user_state[uid] = "idle"
 
-# ====================== 文件处理（完全独立，无冲突） ======================
+# ====================== 处理 ZIP 文件 ======================
+def process_zip(msg, zip_data):
+    uid = msg.from_user.id
+    cid = msg.chat.id
+    all_content = []
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_data), 'r') as zf:
+            for filename in zf.namelist():
+                if filename.lower().endswith('.txt'):
+                    try:
+                        with zf.open(filename) as f:
+                            text = f.read().decode('utf-8', 'ignore')
+                            all_content.append(text)
+                    except:
+                        continue
+
+        if not all_content:
+            bot.send_message(cid, "❌ 压缩包内未找到任何 TXT 文件")
+            return
+
+        # 合并 + 清空行 + 去空格
+        full_text = "\n".join(all_content)
+        lines = [line.strip() for line in full_text.splitlines() if line.strip()]
+        clean_text = "\n".join(lines)
+
+        # 走原有分割逻辑
+        file_process(msg, clean_text)
+
+    except Exception as e:
+        bot.send_message(cid, f"❌ ZIP 处理失败：{str(e)}")
+
+# ====================== 文件处理（支持 ZIP + TXT） ======================
 @bot.message_handler(content_types=['document'])
 def handle_all_files(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     try:
-        if not msg.document.file_name.endswith('.txt'):
-            bot.send_message(cid, "❌ 仅支持 TXT 文件")
-            return
-
         file_info = bot.get_file(msg.document.file_id)
         data = bot.download_file(file_info.file_path)
+        name = msg.document.file_name.lower()
+
+        # 处理 ZIP
+        if name.endswith('.zip'):
+            process_zip(msg, data)
+            return
+
+        # 只处理 TXT
+        if not name.endswith('.txt'):
+            bot.send_message(cid, "❌ 仅支持 TXT / ZIP 文件")
+            return
+
         text = data.decode('utf-8', 'ignore')
 
         # 合并模式
@@ -310,7 +350,7 @@ def handle_all_files(msg):
     except Exception as e:
         bot.send_message(cid, f"❌ 处理失败：{str(e)}")
 
-# ====================== 号码去重（不会分包！直接返回去重文件） ======================
+# ====================== 号码去重 ======================
 def dedup_process(msg, text):
     uid = msg.from_user.id
     cid = msg.chat.id
