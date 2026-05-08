@@ -2,9 +2,11 @@ import os
 import re
 import time
 import random
+import zipfile
 from io import BytesIO
 import telebot
 from telebot.types import InputMediaDocument
+from datetime import datetime, timezone, timedelta
 
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
@@ -33,12 +35,48 @@ def is_admin(uid):
     return uid == ADMIN_ID
 
 def add_log(uid, txt, num, cost):
-    t = time.strftime("%Y-%m-%d %H:%M:%S")
+    t = get_beijing_time_str()
     log_user[uid] = log_user.get(uid,[]) + [f"[{t}]用户{uid}｜{txt}｜{num}行｜扣费{cost:.4f}｜剩余余额{get_user(uid)['balance']:.4f}"]
 
 def add_rc(uid,money):
-    t = time.strftime("%Y-%m-%d %H:%M:%S")
+    t = get_beijing_time_str()
     log_recharge[uid] = log_recharge.get(uid,[]) + [f"[{t}]用户{uid}｜后台批量充值+{money:.4f}｜剩余余额{get_user(uid)['balance']:.4f}"]
+
+# 标准北京时间
+def get_beijing_time_str():
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    beijing_now = utc_now.astimezone(beijing_tz)
+    return beijing_now.strftime("%Y-%m-%d %H:%M:%S")
+
+# ========== 新增：解压ZIP+递归读取文件夹所有TXT + 彻底删除空白行 ==========
+def clean_empty_line(text):
+    """删除空行、纯空格行、首尾多余空格"""
+    lines = text.splitlines()
+    new_lines = []
+    for line in lines:
+        strip_line = line.strip()
+        if strip_line:
+            new_lines.append(strip_line)
+    return "\n".join(new_lines)
+
+def extract_txt_from_zip(zip_bytes):
+    """解压ZIP，无论几层文件夹，提取全部TXT内容"""
+    all_text = ""
+    try:
+        zip_file = zipfile.ZipFile(BytesIO(zip_bytes))
+        # 遍历压缩包里所有文件（含子文件夹）
+        for file_name in zip_file.namelist():
+            # 只处理txt文件，跳过文件夹
+            if file_name.lower().endswith(".txt") and not file_name.endswith("/"):
+                data = zip_file.read(file_name)
+                txt = data.decode("utf-8", "ignore")
+                all_text += txt + "\n"
+        zip_file.close()
+        # 统一清洗空白无效行
+        return clean_empty_line(all_text)
+    except Exception as e:
+        return ""
 
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 
@@ -73,7 +111,6 @@ def user_menu(uid):
     )
     return kb
 
-# 【新增：管理员后台 加入批量加余额按钮】
 def admin_kb():
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
     kb.add(telebot.types.InlineKeyboardButton("➕单人手动加余额",callback_data="addbal"),telebot.types.InlineKeyboardButton("➖单人扣余额",callback_data="subbal"))
@@ -91,16 +128,14 @@ def select_menu():
     )
     return kb
 
-# 启动+北京时间
 @bot.message_handler(commands=['start'])
 def s(m):
     uid = m.from_user.id
     get_user(uid)
     user_state[uid]="idle"
-    now_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    now_time = get_beijing_time_str()
     bot.send_message(m.chat.id,f"🤖大晴机器人运行正常✅\n当前北京时间：{now_time}",reply_markup=menu(uid))
 
-# 全局取消
 @bot.message_handler(func=lambda msg: msg.text.strip() == "取消")
 def cancel_all(msg):
     uid = msg.from_user.id
@@ -156,7 +191,7 @@ def cb(c):
         txt="\n".join(log_user.get(uid,["暂无消费记录"]))
         bot.send_message(cid,txt[:4000])
     elif d=="back":
-        bot.edit_message_text("🏠大晴机器人主菜单",cid,c.message.message_id,reply_markup=menu(uid))
+        bot.edit_message_text("🏠机器人主菜单",cid,c.message.message_id,reply_markup=menu(uid))
 
     elif d=="hebing":
         user_merge[uid]=[]
@@ -165,15 +200,15 @@ def cb(c):
     
     elif d=="quchong":
         user_state[uid]="quchong"
-        bot.send_message(cid,"🧹请发送需要去重的号码文件")
-
+        bot.send_message(cid,"🧹请发送需要去重的号码")
+    
     elif d=="admin" and is_admin(uid):
         bot.edit_message_text("🔧管理员后台控制面板",cid,c.message.message_id,reply_markup=admin_kb())
     
     elif d=="addbal" and is_admin(uid):
         bot.send_message(cid,"➕请输入：用户ID 充值金额")
         bot.register_next_step_handler(c.message, admin_add_balance)
-    elif d=="subbal" and is_admin(uid):
+    elif d=="subbal" and is_admin:
         bot.send_message(cid,"➖请输入：用户ID 扣除金额")
         bot.register_next_step_handler(c.message, admin_sub_balance)
     elif d=="card" and is_admin(uid):
@@ -203,7 +238,6 @@ def cb(c):
         bot.send_message(cid,"📢请输入广播内容")
         bot.register_next_step_handler(c.message, admin_broadcast)
 
-    # ====================新增：批量还原用户余额====================
     elif d=="batch_addbal" and is_admin(uid):
         bot.send_message(cid,"🔥请批量粘贴用户数据\n格式：\n用户ID1 金额\n用户ID2 金额\n一行一个")
         bot.register_next_step_handler(c.message, batch_add_user_balance)
@@ -220,7 +254,6 @@ def cb(c):
         bot.send_message(cid,"📄请输入自定义文件名")
         bot.register_next_step_handler(c.message,lambda m:split_send_clean(cid,uid,user_file[uid]['txt'],m.text))
 
-# ====================批量充值用户余额核心功能====================
 def batch_add_user_balance(msg):
     if not is_admin(msg.from_user.id):return
     lines = msg.text.strip().splitlines()
@@ -297,7 +330,7 @@ def use_cdk(m):
         return
     money=cards.pop(cdk)
     get_user(m.from_user.id)['balance']+=money
-    bot.add_rc(m.from_user.id,money)
+    add_rc(m.from_user.id,money)
     bot.send_message(m.chat.id,f"✅充值到账{money:.4f}元\n余额：{get_user(m.from_user.id)['balance']:.4f}")
 
 def ins_num(m):
@@ -364,7 +397,7 @@ def ins_done(m):
             bot.send_media_group(m.chat.id,media)
             media=[]
             time.sleep(1)
-        idx+=1
+        idx=idx+1
 
     if media:bot.send_media_group(m.chat.id,media)
     csv_bio = BytesIO(csv_data.encode("utf-8-sig"))
@@ -419,34 +452,32 @@ def heb(m):
     user_state[uid]="idle"
     bot.send_message(m.chat.id,f"✅合并完成｜扣费{fee:.4f}元")
 
+# ========== 兼容 TXT + ZIP压缩包上传 ==========
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
     try:
-        f=bot.get_file(m.document.file_id)
-        txt=bot.download_file(f.file_path).decode("utf-8","ignore")
+        file = bot.get_file(m.document.file_id)
+        file_bytes = bot.download_file(file.file_path)
+        file_name = m.document.file_name.lower()
 
-        if user_state.get(uid)=="hebing":
-            user_merge[uid].append(txt)
-            num = len(user_merge[uid])
-            bot.send_message(m.chat.id,f"✅已收录第{num}个文件，发完回复：完成")
+        # 处理ZIP压缩包
+        if file_name.endswith(".zip"):
+            total_txt = extract_txt_from_zip(file_bytes)
+            if not total_txt:
+                return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
+            user_file[uid] = {"txt": total_txt}
+            bot.send_message(m.chat.id,"✅ZIP解压完成！\n已自动提取所有文件夹TXT\n已清空全部空白无效行",reply_markup=select_menu())
         
-        elif user_state.get(uid)=="quchong":
-            old=len(txt.splitlines())
-            new=list(set(txt.splitlines()))
-            fee=len(new)*PRICE_DEDUP
-            u=get_user(uid)
-            if u['balance']<fee:return bot.send_message(m.chat.id,"❌余额不足")
-            u['balance']-=fee
-            add_log(uid,"号码去重",old,fee)
-            bio=BytesIO("\n".join(new).encode())
-            bio.name="去重成品.txt"
-            bot.send_document(m.chat.id,bio)
-        
+        # 处理普通TXT文件
         else:
-            user_file[uid]={"txt":txt}
-            bot.send_message(m.chat.id,"📄文件已保存，请选择处理方式",reply_markup=select_menu())
-    except:
-        bot.send_message(m.chat.id,"❌文件读取失败，请上传TXT文本")
+            txt = file_bytes.decode("utf-8","ignore")
+            # 同样自动清洗空白行
+            clean_txt = clean_empty_line(txt)
+            user_file[uid]={"txt":clean_txt}
+            bot.send_message(m.chat.id,"📄文件已保存，已自动清理空白空行",reply_markup=select_menu())
+
+    except Exception as e:
+        bot.send_message(m.chat.id,"❌文件读取失败，请上传正常TXT/ZIP压缩包")
 
 bot.polling(none_stop=True)
