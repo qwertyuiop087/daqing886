@@ -17,6 +17,10 @@ PRICE_MERGE = 0.0002
 PRICE_DEDUP = 0.0002
 BATCH_SIZE = 10
 
+# 广播全局缓存
+broad_img = None
+broad_text = ""
+
 # 随机三字中文名
 XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛"
 MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
@@ -100,7 +104,9 @@ def menu(uid):
         telebot.types.InlineKeyboardButton("🧹号码去重",callback_data="quchong")
     )
     if is_admin(uid):
-        kb.add(telebot.types.InlineKeyboardButton("🔧管理后台",callback_data="admin"))
+        kb.add(
+            telebot.types.InlineKeyboardButton("🔧管理后台",callback_data="admin")
+        )
     return kb
 
 def user_menu(uid):
@@ -206,6 +212,40 @@ def admin_cmd(msg):
         except:
             bot.send_message(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
+# 接收广播图片
+@bot.message_handler(content_types=['photo'])
+def broadcast_photo(msg):
+    if not is_admin(msg.from_user.id):return
+    global broad_img
+    broad_img = msg.photo[-1].file_id
+    bot.send_message(msg.chat.id,"✅图片已保存，请发送广播文字内容")
+
+# 图文全站广播
+def admin_broadcast(msg):
+    global broad_img, broad_text
+    broad_text = msg.text
+    user_list = list(users.keys())
+    total_user = len(user_list)
+    send_count = 0
+    batch_num = 10
+
+    bot.send_message(msg.chat.id,f"📢开始全站广播，总用户：{total_user}位")
+
+    for uid in user_list:
+        try:
+            if broad_img:
+                bot.send_photo(uid, broad_img, caption=broad_text)
+            else:
+                bot.send_message(chat_id=uid, text=broad_text)
+            send_count += 1
+        except:
+            continue
+
+    bot.send_message(msg.chat.id,f"🎉全站广播全部结束\n成功送达总数：{send_count} 位用户")
+    
+    broad_img = None
+    broad_text = ""
+
 @bot.callback_query_handler(func=lambda c:True)
 def cb(c):
     bot.answer_callback_query(c.id)
@@ -271,7 +311,7 @@ def cb(c):
         if not all_log:all_log=["暂无消费记录"]
         bot.send_message(c.message.chat.id,"📋全站消费记录\n"+"\n".join(all_log[:4000]))
     elif d=="broad" and is_admin(uid):
-        bot.send_message(cid,"📢请输入广播内容")
+        bot.send_message(cid,"📢请先发送广播图片，再发送文字内容")
         bot.register_next_step_handler(c.message, admin_broadcast)
     elif d=="batch_addbal" and is_admin(uid):
         bot.send_message(cid,"🔥请批量粘贴用户数据\n格式：\n用户ID1 金额\n用户ID2 金额\n一行一个")
@@ -299,7 +339,7 @@ def batch_add_user_balance(msg):
             uid, money = line.split()
             uid = int(uid)
             money = float(money)
-            get_user(uid)['balance'] += money
+            get_user(uid)['balance']+=money
             add_rc(uid, money)
             success +=1
         except:
@@ -309,13 +349,13 @@ def batch_add_user_balance(msg):
         reply += f"\n❌格式错误跳过：{len(fail)} 条"
     bot.send_message(msg.chat.id, reply)
 
-def admin_add_balance_balance(msg):
+def admin_add_balance(msg):
     try:
         u_id,money = msg.text.split()
-        u_id=int(u_id)
+        uid=int(u_id)
         money=float(money)
-        get_user(u_id)['balance']+=money
-        add_rc(u_id,money)
+        get_user(uid)['balance']+=money
+        add_rc(uid,money)
         bot.send_message(msg.chat.id,f"✅成功充值用户{u_id}：{money:.4f}元")
     except:
         bot.send_message(msg.chat.id,"格式错误：用户ID 金额")
@@ -333,21 +373,11 @@ def admin_sub_balance(msg):
 def make_card(msg):
     try:
         money = float(msg.text)
-        cdk = "TK"+''.join(random.sample('0123456789ABCDEF',12))
+        cdk = "TK"+''.join(random.sample('012345'))+''.join(random.sample('ABCDEF0123456789',6))
         cards[cdk] = money
         bot.send_message(msg.chat.id,f"✅卡密生成\n{cdk}\n面值：{money:.4f}元")
     except:
         bot.send_message(msg.chat.id,"请输入正确金额")
-
-def admin_broadcast(msg):
-    txt = msg.text
-    count=0
-    for u_id in users.keys():
-        try:
-            bot.send_message(u_id,txt)
-            count+=1
-        except:pass
-    bot.send_message(msg.chat.id,f"✅广播推送 {count} 位用户")
 
 def set_line(m):
     try:
@@ -390,7 +420,7 @@ def ins_phone(m):
     bot.send_message(m.chat.id,"📄请输入文件前缀名")
     bot.register_next_step_handler(m, ins_done)
 
-# 插雷分割+完整雷号位置CSV导出+完整扣费日志
+# 插雷分包+限速：每10个分包停3秒+进度提示
 def ins_done(m):
     uid=m.from_user.id
     info=user_insert[uid]
@@ -414,8 +444,10 @@ def ins_done(m):
     idx=1
     ph_idx=0
     phones = info['phone']
-    # 雷号明细CSV表头
     csv_rows = "分包序号,本行位置,原始号码,插入雷号\n"
+    send_total = len(chunk)
+
+    bot.send_message(m.chat.id,f"📦开始发送分包文件，共{send_total}个\n每发送10个暂停3秒")
 
     for c in chunk:
         chunk_len = len(c)
@@ -449,24 +481,29 @@ END:VCARD
         bio.name=filename
         media.append(InputMediaDocument(bio))
 
+        # 每满10个分包 发送+提示进度+休眠3秒
         if len(media)>=BATCH_SIZE:
             bot.send_media_group(m.chat.id,media)
+            bot.send_message(m.chat.id,f"✅已发送分包：{idx-9} ~ {idx}")
+            time.sleep(3)
             media=[]
-            time.sleep(1)
         idx+=1
 
-    # 发送雷号位置明细表格
+    # 发送剩余文件
+    if media:
+        bot.send_media_group(m.chat.id,media)
+
+    # 雷号明细CSV
     csv_bio = BytesIO(csv_rows.encode("utf-8-sig"))
     csv_bio.name = "雷号插入位置明细.csv"
     bot.send_document(m.chat.id, csv_bio)
 
-    if media:bot.send_media_group(m.chat.id,media)
-    bot.send_message(m.chat.id,"🎉全部分包处理完成")
+    bot.send_message(m.chat.id,"🎉全部分包文件发送完成")
     
     del user_file[uid]
     del user_insert[uid]
 
-# 纯净分割
+# 纯净无雷分包 同样限速每10个停3秒+进度提示
 def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
@@ -480,6 +517,9 @@ def split_send_clean(cid,uid,txt,name):
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media=[]
     idx=1
+    send_total = len(chunk)
+    bot.send_message(cid,f"📦开始发送纯净分包，共{send_total}个\n每发送10个暂停3秒")
+
     for c in chunk:
         if u['mode']=="VCF":
             vcf_txt = ""
@@ -492,13 +532,17 @@ def split_send_clean(cid,uid,txt,name):
             bio=BytesIO("\n".join(c).encode())
             bio.name=f"{name}_{idx}.txt"
         media.append(InputMediaDocument(bio))
+
+        # 每10个分包休息3秒+提示用户进度
         if len(media)>=BATCH_SIZE:
             bot.send_media_group(cid,media)
+            bot.send_message(cid,f"✅已发送分包：{idx-9} ~ {idx}")
+            time.sleep(3)
             media=[]
-            time.sleep(1)
         idx+=1
+
     if media:bot.send_media_group(cid,media)
-    bot.send_message(cid,"🎉纯净分包完成")
+    bot.send_message(cid,"🎉纯净分包全部发送完毕")
     del user_file[uid]
 
 # 文件上传接收
