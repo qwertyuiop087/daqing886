@@ -49,7 +49,7 @@ def get_beijing_time_str():
     beijing_now = utc_now.astimezone(beijing_tz)
     return beijing_now.strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 新增：解压ZIP+递归读取文件夹所有TXT + 彻底删除空白行 ==========
+# 新增：解压ZIP+递归读取文件夹所有TXT + 彻底删除空白行
 def clean_empty_line(text):
     """删除空行、纯空格行、首尾多余空格"""
     lines = text.splitlines()
@@ -200,7 +200,7 @@ def cb(c):
     
     elif d=="quchong":
         user_state[uid]="quchong"
-        bot.send_message(cid,"🧹请发送需要去重的号码")
+        bot.send_message(cid,"🧹请发送需要去重的号码文件")
     
     elif d=="admin" and is_admin(uid):
         bot.edit_message_text("🔧管理员后台控制面板",cid,c.message.message_id,reply_markup=admin_kb())
@@ -208,7 +208,7 @@ def cb(c):
     elif d=="addbal" and is_admin(uid):
         bot.send_message(cid,"➕请输入：用户ID 充值金额")
         bot.register_next_step_handler(c.message, admin_add_balance)
-    elif d=="subbal" and is_admin:
+    elif d=="subbal" and is_admin(uid):
         bot.send_message(cid,"➖请输入：用户ID 扣除金额")
         bot.register_next_step_handler(c.message, admin_sub_balance)
     elif d=="card" and is_admin(uid):
@@ -452,32 +452,89 @@ def heb(m):
     user_state[uid]="idle"
     bot.send_message(m.chat.id,f"✅合并完成｜扣费{fee:.4f}元")
 
-# ========== 兼容 TXT + ZIP压缩包上传 ==========
+# 修复核心：完整处理所有状态的文件上传逻辑
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
+    current_state = user_state.get(uid, "idle")
+    
     try:
         file = bot.get_file(m.document.file_id)
         file_bytes = bot.download_file(file.file_path)
         file_name = m.document.file_name.lower()
 
-        # 处理ZIP压缩包
-        if file_name.endswith(".zip"):
-            total_txt = extract_txt_from_zip(file_bytes)
-            if not total_txt:
-                return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
-            user_file[uid] = {"txt": total_txt}
-            bot.send_message(m.chat.id,"✅ZIP解压完成！\n已自动提取所有文件夹TXT\n已清空全部空白无效行",reply_markup=select_menu())
+        # 1. 处理文件合并状态
+        if current_state == "hebing":
+            # 处理ZIP压缩包
+            if file_name.endswith(".zip"):
+                total_txt = extract_txt_from_zip(file_bytes)
+                if not total_txt:
+                    return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
+                user_merge[uid].append(total_txt)
+            else:
+                # 处理普通TXT文件
+                txt = file_bytes.decode("utf-8","ignore")
+                clean_txt = clean_empty_line(txt)
+                user_merge[uid].append(clean_txt)
+            
+            num = len(user_merge[uid])
+            bot.send_message(m.chat.id,f"✅已收录第{num}个文件，发完回复：完成")
+            return  # 关键：直接返回，不进入后续流程
         
-        # 处理普通TXT文件
+        # 2. 处理号码去重状态
+        elif current_state == "quchong":
+            # 处理ZIP压缩包
+            if file_name.endswith(".zip"):
+                total_txt = extract_txt_from_zip(file_bytes)
+                if not total_txt:
+                    return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
+                clean_txt = total_txt
+            else:
+                # 处理普通TXT文件
+                txt = file_bytes.decode("utf-8","ignore")
+                clean_txt = clean_empty_line(txt)
+            
+            # 执行去重操作
+            old_lines = clean_txt.splitlines()
+            old_count = len(old_lines)
+            new_lines = list(set(old_lines))  # 去重
+            new_count = len(new_lines)
+            fee = new_count * PRICE_DEDUP
+            
+            u = get_user(uid)
+            if u['balance'] < fee:
+                return bot.send_message(m.chat.id,"❌余额不足")
+            
+            u['balance'] -= fee
+            add_log(uid,"号码去重",old_count,fee)
+            
+            # 生成去重后的文件
+            bio = BytesIO("\n".join(new_lines).encode())
+            bio.name = "去重成品.txt"
+            bot.send_document(m.chat.id, bio)
+            bot.send_message(m.chat.id,f"✅去重完成｜原行数：{old_count}｜新行数：{new_count}｜扣费{fee:.4f}元")
+            user_state[uid] = "idle"  # 重置状态
+            return  # 关键：直接返回，不进入后续流程
+        
+        # 3. 处理默认分包状态（idle）
         else:
-            txt = file_bytes.decode("utf-8","ignore")
-            # 同样自动清洗空白行
-            clean_txt = clean_empty_line(txt)
-            user_file[uid]={"txt":clean_txt}
-            bot.send_message(m.chat.id,"📄文件已保存，已自动清理空白空行",reply_markup=select_menu())
+            # 处理ZIP压缩包
+            if file_name.endswith(".zip"):
+                total_txt = extract_txt_from_zip(file_bytes)
+                if not total_txt:
+                    return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
+                user_file[uid] = {"txt": total_txt}
+                bot.send_message(m.chat.id,"✅ZIP解压完成！\n已自动提取所有文件夹TXT\n已清空全部空白无效行",reply_markup=select_menu())
+            
+            # 处理普通TXT文件
+            else:
+                txt = file_bytes.decode("utf-8","ignore")
+                # 同样自动清洗空白行
+                clean_txt = clean_empty_line(txt)
+                user_file[uid]={"txt":clean_txt}
+                bot.send_message(m.chat.id,"📄文件已保存，已自动清理空白空行",reply_markup=select_menu())
 
     except Exception as e:
-        bot.send_message(m.chat.id,"❌文件读取失败，请上传正常TXT/ZIP压缩包")
+        bot.send_message(m.chat.id,f"❌文件读取失败：{str(e)}\n请上传正常TXT/ZIP压缩包")
 
 bot.polling(none_stop=True)
