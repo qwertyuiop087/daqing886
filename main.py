@@ -5,7 +5,6 @@ import time
 from io import BytesIO
 from telebot import TeleBot, types
 import logging
-
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
@@ -14,12 +13,11 @@ BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
 # ======================================================
 
-# 价格标准 严格按你要求
+# 价格标准 严格不变
 PRICE_SPLIT = 0.0004    # 分割、插入号码 每行
 PRICE_MERGE = 0.0002    # 合并txt 每行
 PRICE_DEDUP = 0.0002    # 去重 每行
-
-SEND_BATCH = 10 # 每10个文件发送一次
+SEND_BATCH = 10 # 每10个文件发送一次提示
 
 user_file = {}
 users = {}
@@ -27,7 +25,6 @@ cards = {}
 user_merge_temp = {}
 user_state = {}
 user_insert_info = {}
-
 user_log = {}
 user_recharge_log = {}
 
@@ -52,7 +49,7 @@ def add_recharge_log(uid, amount, way):
     now_time = time.strftime("%Y-%m-%d %H:%M:%S")
     if uid not in user_recharge_log:
         user_recharge_log[uid] = []
-    user_recharge_log[uid].append(f"【{now_time}】\n操作方式：{way}\n变动金额：{amount:.4f}元\n当前余额：{get_user(uid)['balance']:.4f}元\n——————————")
+    user_recharge_log[uid].append(f"【{now_time}】\n操作方式：{way}\n变动金额：{amount:.4f}元\n当前余额：{get_user(uid)[:balance]:.4f}元\n——————————")
 
 # 查看个人余额
 def show_user_balance(cid, uid):
@@ -72,6 +69,9 @@ def show_recharge_log(cid, uid):
 
 # 查看个人文件消费记录
 def show_user_log(cid, uid):
+    bal = get_user(uid)['balance']
+    if uid == bot.message.from_user.id:
+        bot.send_message(cid,f"📌 当前剩余余额：{bal:.4f}元")
     if uid not in user_log or len(user_log[uid]) == 0:
         bot.send_message(cid, "📭 暂无文件处理消费记录")
         return
@@ -195,57 +195,73 @@ def handle_all(call):
             u = get_user(uid)
             u['mode'] = "VCF"
             bot.edit_message_text("✅ 文件格式模式已切换",cid,mid,reply_markup=main_menu(uid))
+
         elif act == "set_lines":
             bot.send_message(cid,"✏️ 请输入单次分割行数：")
             bot.register_next_step_handler(call.message, set_lines)
+
         elif act == "redeem":
             bot.send_message(cid,"💳 请输入您的充值卡密：")
             bot.register_next_step_handler(call.message, redeem)
-        
+
         # 个人中心功能
         elif act == "user_center":
             bot.edit_message_text("👤 用户个人中心",cid,mid,reply_markup=user_center_menu(uid))
+
         elif act == "my_balance":
             show_user_balance(cid, uid)
+
         elif act == "my_recharge":
             show_recharge_log(cid, uid)
+
         elif act == "my_log":
             show_user_log(cid, uid)
+
         elif act == "back_main":
             bot.edit_message_text("✅ 返回机器人主菜单",cid,mid,reply_markup=main_menu(uid))
 
         elif act == "admin":
             bot.edit_message_text("🔧 管理员后台管理面板",cid,mid,reply_markup=admin_menu())
+
         elif act == "back":
             bot.edit_message_text("✅ 返回主菜单",cid,mid,reply_markup=main_menu(uid))
+
         elif act == "merge_txt":
             user_merge_temp[uid] = []
             user_state[uid] = "merging"
             bot.send_message(cid, "📎 依次发送所有TXT文件\n全部发送完毕后回复：完成")
+
         elif act == "deduplicate":
             user_state[uid] = "dedup"
             bot.send_message(cid, "🧹 请发送需要去重的号码TXT文件")
+
         elif act == "admin_log_all":
             show_all_admin_log(cid)
+
         elif act == "admin_recharge_all":
             show_all_admin_recharge_log(cid)
 
         elif act == "addbal":
             bot.send_message(cid,"➕ 格式：用户ID 充值金额")
-            bot.register_next_step_handler(call.message,add_balance)
+            bot.register_next_step_handler(bot.message,add_balance)
+
         elif act == "deductbal":
             bot.send_message(cid,"➖ 格式：用户ID 扣除金额")
             bot.register_next_step_handler(call.message,deduct_balance)
+
         elif act == "gencard":
             bot.send_message(cid,"📛 格式：生成数量 单张面额")
             bot.register_next_step_handler(call.message,gen_card)
+
         elif act == "userlist":
             txt = "📊 全部用户余额清单\n"
             for i in users: txt+=f"{i} → {users[i]['balance']:.4f}元\n"
             bot.send_message(cid,txt)
+
         elif act == "broadcast":
             bot.send_message(cid,"📢 请输入全站广播内容：")
             bot.register_next_step_handler(call.message,broadcast)
+
         elif act == "batch_add_bal":
             bot.send_message(cid,"📥 格式：\nID 金额\n每行一条")
             bot.register_next_step_handler(call.message,batch_add_balance)
@@ -310,7 +326,7 @@ def insert_finish_name(m, uid):
         fname = name
     go_insert_phone_batch(m.chat.id, uid, fname)
 
-# ====================== 批量10个一组发送+进度提示 ======================
+# ====================== 批量10个一组发送+进度提示+扣费余额实时显示 ======================
 def go分割批量发送(cid, uid, content, name):
     user = get_user(uid)
     lines = [x for x in content.splitlines() if x.strip()]
@@ -324,9 +340,12 @@ def go分割批量发送(cid, uid, content, name):
     user['balance'] -= fee
     add_log(uid, f"TXT分割{user['split_lines']}行", total, fee)
 
+    # 扣费后立刻播报剩余余额
+    bot.send_message(cid,f"💸 本次扣费：{fee:.4f}元\n✅ 当前剩余余额：{user['balance']:.4f}元")
+
     chunks = [lines[i:i+user['split_lines']] for i in range(0, total, user['split_lines'])]
     total_page = len(chunks)
-    bot.send_message(cid,f"📄 开始分割，总共{total_page}份文件\n每10份批量发送一次")
+    bot.send_message(cid,f"📄 开始分割，总共{total_page}份文件\n每满10份自动播报进度")
 
     send_now = 0
     for idx, chunk in enumerate(chunks, 1):
@@ -335,12 +354,13 @@ def go分割批量发送(cid, uid, content, name):
         f = BytesIO(txt.encode())
         f.name = f"{name}_{idx}.txt"
         bot.send_document(cid, f)
-        
-        # 每满10个提示一次进度
+        time.sleep(0.3) # 防TG风控乱序
+
+        # 严格满10条才提示
         if send_now % SEND_BATCH == 0:
             bot.send_message(cid,f"✅ 已发送 {send_now} 份 / 总计{total_page}份")
-    
-    # 收尾提示剩余全部发完
+
+    # 最终收尾
     bot.send_message(cid,f"🎉 全部分割完成！累计发送 {total_page} 份文件")
 
 def go_normal_batch(cid, uid, content, name):
@@ -363,10 +383,13 @@ def go_insert_phone_batch(cid, uid, fname):
     user['balance'] -= fee
     add_log(uid, f"分割+插入号码{per}条", total, fee)
 
+    # 实时显示扣费+剩余余额
+    bot.send_message(cid,f"💸 本次扣费：{fee:.4f}元\n✅ 当前剩余余额：{user['balance']:.4f}元")
+
     chunks = [lines[i:i+user['split_lines']] for i in range(0, total, user['split_lines'])]
     total_page = len(chunks)
-    bot.send_message(cid,f"📄 开始分割插入，总共{total_page}份文件\n每10份批量发送一次")
-    
+    bot.send_message(cid,f"📄 开始分割插入，总共{total_page}份文件\n每满10份自动播报进度")
+
     send_now = 0
     for idx, chunk in enumerate(chunks, 1):
         send_now +=1
@@ -376,10 +399,11 @@ def go_insert_phone_batch(cid, uid, fname):
         f = BytesIO(txt.encode())
         f.name = f"{fname}_{idx}.txt"
         bot.send_document(cid, f)
+        time.sleep(0.3)
 
         if send_now % SEND_BATCH == 0:
             bot.send_message(cid,f"✅ 已发送 {send_now} 份 / 总计{total_page}份")
-    
+
     bot.send_message(cid,f"🎉 全部插入分割完成！累计发送 {total_page} 份")
     del user_insert_info[uid]
 
@@ -389,7 +413,6 @@ def handle_text(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     text = msg.text.strip()
-
     if uid in user_state and user_state[uid] == "merging" and text == "完成":
         merge_finish(msg)
         return
@@ -510,12 +533,13 @@ def merge_finish(msg):
 
     bot_user['balance'] -= fee
     add_log(uid, "多文件TXT合并", total, fee)
+    bot.send_message(cid,f"💸 合并扣费：{fee:.4f}元\n✅ 当前剩余余额：{bot_user['balance']:.4f}元")
 
     out_content = "\n".join(all_lines)
     file = BytesIO(out_content.encode('utf-8'))
     file.name = f"合并结果_{int(time.time())}.txt"
     bot.send_document(cid, file)
-    
+
     del user_merge_temp[uid]
     user_state[uid] = "idle"
 
@@ -531,26 +555,33 @@ def get_doc(msg):
         if user_state.get(uid) == "merging":
             user_merge_temp[uid].append(text)
             bot.send_message(cid, "✅ 文件已收录，请继续发送或回复：完成")
+
         elif user_state.get(uid) == "dedup":
             old = len(text.splitlines())
             new = list(set(text.splitlines()))
             new_cnt = len(new)
             fee = new_cnt * PRICE_DEDUP
             u = get_user(uid)
+
             if u['balance'] < fee:
                 bot.send_message(cid, f"❌ 余额不足，去重扣费{fee:.4f}元")
                 return
+
             u['balance'] -= fee
             add_log(uid, "号码去重", old, fee)
+            bot.send_message(cid,f"💸 去重扣费：{fee:.4f}元\n✅ 当前剩余余额：{u['balance']:.4f}元")
+
             out = "\n".join(new)
             f = BytesIO(out.encode())
             f.name = "去重结果.txt"
             bot.send_document(cid, f)
             user_state[uid] = "idle"
+
         else:
             lines = [x for x in text.splitlines() if x.strip()]
             user_file[uid] = {"n": msg.document.file_name, "c": text}
             bot.send_message(cid, "📄 文件已读取，请选择操作", reply_markup=insert_choose_menu())
+
     except Exception as e:
         print(e)
         bot.send_message(cid, "❌ 文件读取失败")
