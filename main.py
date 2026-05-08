@@ -12,10 +12,19 @@ BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
 
 PRICE_SPLIT = 0.0004
-PRICE_INSERT = 0.0004
+PRICE_INSERT = 0.0001
 PRICE_MERGE = 0.0002
 PRICE_DEDUP = 0.0002
 BATCH_SIZE = 10
+
+# 随机三字中文名用字库
+XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛"
+MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
+MING2 = "杰豪琳雪婷芳莹瑞阳鑫鹏佳怡涵悦彤诗雅泽安诺"
+
+def get_rand_3_name():
+    """随机生成3个字中文名"""
+    return random.choice(XING) + random.choice(MING1) + random.choice(MING2)
 
 user_file = {}
 users = {}
@@ -49,9 +58,8 @@ def get_beijing_time_str():
     beijing_now = utc_now.astimezone(beijing_tz)
     return beijing_now.strftime("%Y-%m-%d %H:%M:%S")
 
-# 新增：解压ZIP+递归读取文件夹所有TXT + 彻底删除空白行
+# 解压ZIP+清洗空白行
 def clean_empty_line(text):
-    """删除空行、纯空格行、首尾多余空格"""
     lines = text.splitlines()
     new_lines = []
     for line in lines:
@@ -61,19 +69,15 @@ def clean_empty_line(text):
     return "\n".join(new_lines)
 
 def extract_txt_from_zip(zip_bytes):
-    """解压ZIP，无论几层文件夹，提取全部TXT内容"""
     all_text = ""
     try:
         zip_file = zipfile.ZipFile(BytesIO(zip_bytes))
-        # 遍历压缩包里所有文件（含子文件夹）
         for file_name in zip_file.namelist():
-            # 只处理txt文件，跳过文件夹
             if file_name.lower().endswith(".txt") and not file_name.endswith("/"):
                 data = zip_file.read(file_name)
                 txt = data.decode("utf-8", "ignore")
                 all_text += txt + "\n"
         zip_file.close()
-        # 统一清洗空白无效行
         return clean_empty_line(all_text)
     except Exception as e:
         return ""
@@ -134,7 +138,7 @@ def s(m):
     get_user(uid)
     user_state[uid]="idle"
     now_time = get_beijing_time_str()
-    bot.send_message(m.chat.id,f"🤖大晴机器人运行正常✅\n当前北京时间：{now_time}",reply_markup=menu(uid))
+    bot.send_message(m.chat.id,f"🤖工具机器人运行正常✅\n当前北京时间：{now_time}\n支持TXT / VCF互转｜TXT/ZIP自动解析",reply_markup=menu(uid))
 
 @bot.message_handler(func=lambda msg: msg.text.strip() == "取消")
 def cancel_all(msg):
@@ -144,6 +148,47 @@ def cancel_all(msg):
     if uid in user_insert: del user_insert[uid]
     if uid in user_file: del user_file[uid]
     bot.send_message(msg.chat.id,"✅已清空所有操作缓存，请重新上传文件")
+
+# 修复：合并完成 优先判断
+@bot.message_handler(func=lambda m:user_state.get(m.from_user.id)=="hebing" and m.text=="完成")
+def heb(m):
+    uid=m.from_user.id
+    if len(user_merge[uid])==0:
+        bot.send_message(m.chat.id,"❌你还没有上传任何文件")
+        return
+    txt="\n".join(user_merge[uid])
+    ls=len(txt.splitlines())
+    fee=ls*PRICE_MERGE
+    u=get_user(uid)
+    if u['balance']<fee:
+        bot.send_message(m.chat.id,"❌余额不足")
+        return
+    
+    u['balance']-=fee
+    add_log(uid,"文件合并",ls,fee)
+    
+    # 合并也兼容VCF
+    if u['mode']=="VCF":
+        vcf_all = ""
+        for phone in txt.splitlines():
+            name = get_rand_3_name()
+            vcf_all += f"""BEGIN:VCARD
+VERSION:3.0
+N:{name};;;
+FN:{name}
+TEL;TYPE=CELL:{phone}
+END:VCARD
+
+"""
+        bio=BytesIO(vcf_all.encode())
+        bio.name="合并通讯录.vcf"
+    else:
+        bio=BytesIO(txt.encode())
+        bio.name="合并成品.txt"
+
+    bot.send_document(m.chat.id,bio)
+    user_state[uid]="idle"
+    bot.send_message(m.chat.id,f"✅合并完成｜共{ls}行｜扣费{fee:.4f}元")
 
 @bot.message_handler(func=lambda msg: is_admin(msg.from_user.id))
 def admin_cmd(msg):
@@ -178,7 +223,7 @@ def cb(c):
         bot.send_message(cid,"📏请输入每份分割行数")
         bot.register_next_step_handler(c.message,set_line)
     elif d=="user_cdk":
-        bot.send_message(cid,"💳请粘贴你的卡密兑换 购买联系 @sechou")
+        bot.send_message(cid,"💳请粘贴你的卡密兑换")
         bot.register_next_step_handler(c.message,use_cdk)
     elif d=="user":
         bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
@@ -285,7 +330,7 @@ def admin_add_balance(msg):
         add_rc(u_id,money)
         bot.send_message(msg.chat.id,f"✅成功充值用户{u_id}：{money:.4f}元")
     except:
-        bot.send_message(msg.chat.id,"格式错误：用户ID 金额")
+        bot.send_message(get_user(msg.chat.id),"格式错误：用户ID 金额")
 
 def admin_sub_balance(msg):
     try:
@@ -379,18 +424,27 @@ def ins_done(m):
     idx=1
     ph_idx=0
     phones = info['phone']
-    csv_data = "雷号号码,分包文件名,所在行号\n"
 
     for c in chunk:
-        filename = f"{m.text}_{idx}.txt"
-        for _ in range(info['num']):
-            ph = phones[ph_idx%len(phones)]
-            line_num = len(c)+1
-            c.append(ph)
-            csv_data += f"{ph},{filename},{line_num}\n"
-            ph_idx+=1
+        # VCF模式自动生成三字人名
+        if u['mode']=="VCF":
+            vcf_content = ""
+            for phone in c:
+                name = get_rand_3_name()
+                vcf_content += f"""BEGIN:VCARD
+VERSION:3.0
+N:{name};;;
+FN:{name}
+TEL;TYPE=CELL:{phone}
+END:VCARD
 
-        bio=BytesIO("\n".join(c).encode())
+"""
+            filename = f"{m.text}_{idx}.vcf"
+            bio=BytesIO(vcf_content.encode())
+        else:
+            bio=BytesIO("\n".join(c).encode())
+            filename = f"{m.text}_{idx}.txt"
+
         bio.name=filename
         media.append(InputMediaDocument(bio))
         if len(media)>=BATCH_SIZE:
@@ -400,15 +454,12 @@ def ins_done(m):
         idx=idx+1
 
     if media:bot.send_media_group(m.chat.id,media)
-    csv_bio = BytesIO(csv_data.encode("utf-8-sig"))
-    csv_bio.name = "雷号插入位置明细.csv"
-    bot.send_document(m.chat.id, csv_bio)
-
-    bot.send_message(m.chat.id,"🎉全部处理完成，附带位置明细表格")
+    bot.send_message(m.chat.id,"🎉全部分包处理完成")
     
     del user_file[uid]
     del user_insert[uid]
 
+# 纯净分割 + VCF三字姓名
 def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
@@ -416,15 +467,24 @@ def split_send_clean(cid,uid,txt,name):
     u=get_user(uid)
     if u['balance']<fee:return bot.send_message(cid,"❌余额不足")
     u['balance']-=fee
-    add_log(uid,"纯净分包",total,fee)
+    add_log(uid,f"{u['mode']}纯净分包",total,fee)
     bot.send_message(cid,f"💸扣费：{fee:.4f}元｜剩余：{u['balance']:.4f}")
 
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media=[]
     idx=1
     for c in chunk:
-        bio=BytesIO("\n".join(c).encode())
-        bio.name=f"{name}_{idx}.txt"
+        if u['mode']=="VCF":
+            vcf_txt = ""
+            for phone in c:
+                name3 = get_rand_3_name()
+                vcf_txt += f"BEGIN:VCARD\nVERSION:3.0\nN:{name3};;;\nFN:{name3}\nTEL;TYPE=CELL:{phone}\nEND:VCARD\n\n"
+            bio=BytesIO(vcf_txt.encode())
+            bio.name=f"{name}_{idx}.vcf"
+        else:
+            bio=BytesIO("\n".join(c).encode())
+            bio.name=f"{name}_{idx}.txt"
+
         media.append(InputMediaDocument(bio))
         if len(media)>=BATCH_SIZE:
             bot.send_media_group(cid,media)
@@ -436,23 +496,7 @@ def split_send_clean(cid,uid,txt,name):
 
     del user_file[uid]
 
-@bot.message_handler(func=lambda m:user_state.get(m.from_user.id)=="hebing" and m.text=="完成")
-def heb(m):
-    uid=m.from_user.id
-    txt="\n".join(user_merge[uid])
-    ls=len(txt.splitlines())
-    fee=ls*PRICE_MERGE
-    u=get_user(uid)
-    if u['balance']<fee:return bot.send_message(m.chat.id,"❌余额不足")
-    u['balance']-=fee
-    add_log(uid,"文件合并",ls,fee)
-    bio=BytesIO(txt.encode())
-    bio.name="合并成品.txt"
-    bot.send_document(m.chat.id,bio)
-    user_state[uid]="idle"
-    bot.send_message(m.chat.id,f"✅合并完成｜扣费{fee:.4f}元")
-
-# 修复核心：完整处理所有状态的文件上传逻辑
+# 文件上传处理
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
@@ -463,41 +507,34 @@ def doc(m):
         file_bytes = bot.download_file(file.file_path)
         file_name = m.document.file_name.lower()
 
-        # 1. 处理文件合并状态
         if current_state == "hebing":
-            # 处理ZIP压缩包
             if file_name.endswith(".zip"):
                 total_txt = extract_txt_from_zip(file_bytes)
                 if not total_txt:
                     return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
                 user_merge[uid].append(total_txt)
             else:
-                # 处理普通TXT文件
                 txt = file_bytes.decode("utf-8","ignore")
                 clean_txt = clean_empty_line(txt)
                 user_merge[uid].append(clean_txt)
             
             num = len(user_merge[uid])
             bot.send_message(m.chat.id,f"✅已收录第{num}个文件，发完回复：完成")
-            return  # 关键：直接返回，不进入后续流程
+            return
         
-        # 2. 处理号码去重状态
         elif current_state == "quchong":
-            # 处理ZIP压缩包
             if file_name.endswith(".zip"):
                 total_txt = extract_txt_from_zip(file_bytes)
                 if not total_txt:
                     return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
                 clean_txt = total_txt
             else:
-                # 处理普通TXT文件
                 txt = file_bytes.decode("utf-8","ignore")
                 clean_txt = clean_empty_line(txt)
             
-            # 执行去重操作
             old_lines = clean_txt.splitlines()
             old_count = len(old_lines)
-            new_lines = list(set(old_lines))  # 去重
+            new_lines = list(set(old_lines))
             new_count = len(new_lines)
             fee = new_count * PRICE_DEDUP
             
@@ -507,34 +544,38 @@ def doc(m):
             
             u['balance'] -= fee
             add_log(uid,"号码去重",old_count,fee)
-            
-            # 生成去重后的文件
-            bio = BytesIO("\n".join(new_lines).encode())
-            bio.name = "去重成品.txt"
+
+            # 去重也输出对应VCF
+            if u['mode']=="VCF":
+                out_vcf = ""
+                for p in new_lines:
+                    n = get_rand_3_name()
+                    out_vcf += f"BEGIN:VCARD\nVERSION:3.0\nN:{n};;;\nFN:{n}\nTEL;TYPE=CELL:{p}\nEND:VCARD\n\n"
+                bio = BytesIO(out_vcf.encode())
+                bio.name = "去重通讯录.vcf"
+            else:
+                bio = BytesIO("\n".join(new_lines).encode())
+                bio.name = "去重成品.txt"
+
             bot.send_document(m.chat.id, bio)
-            bot.send_message(m.chat.id,f"✅去重完成｜原行数：{old_count}｜新行数：{new_count}｜扣费{fee:.4f}元")
-            user_state[uid] = "idle"  # 重置状态
-            return  # 关键：直接返回，不进入后续流程
+            bot.send_message(m.chat.id,f"✅去重完成｜原{old_count}｜新{new_count}｜扣费{fee:.4f}元")
+            user_state[uid] = "idle"
+            return
         
-        # 3. 处理默认分包状态（idle）
         else:
-            # 处理ZIP压缩包
             if file_name.endswith(".zip"):
                 total_txt = extract_txt_from_zip(file_bytes)
                 if not total_txt:
                     return bot.send_message(m.chat.id,"❌压缩包里未找到任何TXT文本")
                 user_file[uid] = {"txt": total_txt}
-                bot.send_message(m.chat.id,"✅ZIP解压完成！\n已自动提取所有文件夹TXT\n已清空全部空白无效行",reply_markup=select_menu())
-            
-            # 处理普通TXT文件
+                bot.send_message(m.chat.id,"✅ZIP解压完成！\n已自动提取所有文件夹TXT\n当前格式："+get_user(uid)['mode'],reply_markup=select_menu())
             else:
                 txt = file_bytes.decode("utf-8","ignore")
-                # 同样自动清洗空白行
                 clean_txt = clean_empty_line(txt)
                 user_file[uid]={"txt":clean_txt}
-                bot.send_message(m.chat.id,"📄文件已保存，已自动清理空白空行",reply_markup=select_menu())
+                bot.send_message(m.chat.id,"📄文件已保存，已清空白行\n当前格式："+get_user(uid)['mode'],reply_markup=select_menu())
 
     except Exception as e:
-        bot.send_message(m.chat.id,f"❌文件读取失败：{str(e)}\n请上传正常TXT/ZIP压缩包")
+        bot.send_message(m.chat.id,f"❌文件读取失败：{str(e)}")
 
 bot.polling(none_stop=True)
