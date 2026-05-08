@@ -12,7 +12,7 @@ BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
 
 PRICE_SPLIT = 0.0004
-PRICE_INSERT = 0.0001
+PRICE_INSERT = 0.004
 PRICE_MERGE = 0.0002
 PRICE_DEDUP = 0.0002
 BATCH_SIZE = 10
@@ -138,7 +138,7 @@ def s(m):
     get_user(uid)
     user_state[uid]="idle"
     now_time = get_beijing_time_str()
-    bot.send_message(m.chat.id,f"🤖工具机器人运行正常✅\n当前北京时间：{now_time}\n支持TXT / VCF互转｜TXT/ZIP自动解析",reply_markup=menu(uid))
+    bot.send_message(m.chat.id,f"🤖大晴机器人运行正常✅\n当前北京时间：{now_time}",reply_markup=menu(uid))
 
 @bot.message_handler(func=lambda msg: msg.text.strip() == "取消")
 def cancel_all(msg):
@@ -223,7 +223,7 @@ def cb(c):
         bot.send_message(cid,"📏请输入每份分割行数")
         bot.register_next_step_handler(c.message,set_line)
     elif d=="user_cdk":
-        bot.send_message(cid,"💳请粘贴你的卡密兑换")
+        bot.send_message(cid,"💳请粘贴你的卡密兑换 购买联系 @sechou")
         bot.register_next_step_handler(c.message,use_cdk)
     elif d=="user":
         bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
