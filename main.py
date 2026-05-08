@@ -50,7 +50,7 @@ def show_user_balance(cid, uid):
     bal = get_user(uid)['balance']
     bot.send_message(cid, f"💰 个人余额\n当前剩余：{bal:.4f} 元")
 
-def show_recharge_log(cid, uid):
+def show_recharge_log(cid, uid):  # 修复：添加uid参数
     if uid not in user_recharge_log or len(user_recharge_log[uid]) == 0:
         bot.send_message(cid, "📭 暂无任何充值记录")
         return
@@ -114,7 +114,7 @@ def admin_menu():
     )
     kb.add(
         telebot.types.InlineKeyboardButton("📢 全站广播消息", callback_data="broadcast"),
-        telebot.types.InlineKeyboardButton("🔙 返回主菜单", callback_data="back")
+        telebot.types.InlineKeyboardButton("🔙 返回主菜单", callback_data="back_main")  # 修复：改为back_main
     )
     kb.add(telebot.types.InlineKeyboardButton("📥 批量增加余额", callback_data="batch_add_bal"))
     return kb
@@ -143,7 +143,7 @@ def handle_all(call):
         uid = call.from_user.id
         cid = call.message.chat.id
         act = call.data
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id)  # 必须应答，否则按钮会一直转圈
 
         admin_list = ["addbal","deductbal","gencard","userlist","broadcast","batch_add_bal"]
         if not is_admin(uid) and act in admin_list:
@@ -167,15 +167,13 @@ def handle_all(call):
         elif act == "my_balance":
             show_user_balance(cid, uid)
         elif act == "my_recharge":
-            show_recharge_log(cid)
+            show_recharge_log(cid, uid)  # 修复：添加uid参数
         elif act == "my_log":
             show_user_log(cid, uid)
         elif act == "back_main":
             bot.edit_message_text("✅ 主菜单",cid,call.message.message_id,reply_markup=main_menu(uid))
         elif act == "admin":
             bot.edit_message_text("🔧 管理面板",cid,call.message.message_id,reply_markup=admin_menu())
-        elif act == "back":
-            bot.edit_message_text("✅ 主菜单",cid,call.message.message_id,reply_markup=main_menu(uid))
         elif act == "merge_txt":
             user_merge_temp[uid] = []
             user_state[uid] = "merging"
@@ -197,7 +195,8 @@ def handle_all(call):
             bot.register_next_step_handler(call.message, lambda m: go_batch_split(cid, uid, data['c'], m.text.strip()))
 
     except Exception as e:
-        print(e)
+        print(f"回调错误：{e}")  # 打印错误便于排查
+        bot.send_message(cid, f"❌ 操作失败：{str(e)}")
 
 # ==================== 插入号码流程 ====================
 def insert_get_num_count(m, uid):
@@ -210,7 +209,7 @@ def insert_get_num_count(m, uid):
         num = int(txt)
         user_insert_info[uid] = {"per": num, "old": user_file[uid]['n'], "txt": user_file[uid]['c']}
         bot.send_message(m.chat.id, "📞 发送循环手机号")
-        bot.register_next_step_handler(m, insert_get_phone)
+        bot.register_next_step_handler(m, lambda mm: insert_get_phone(mm, uid))
     except:
         bot.send_message(m.chat.id, "❌ 请输数字")
         bot.register_next_step_handler(m, lambda mm: insert_get_num_count(mm, uid))
@@ -228,14 +227,14 @@ def insert_get_phone(m, uid):
         return
     user_insert_info[uid]['list'] = phones
     bot.send_message(m.chat.id, "✏️ 文件名 / 原文件名")
-    bot.register_next_step_handler(m, insert_done)
+    bot.register_next_step_handler(m, lambda mm: insert_done(mm, uid))
 
 def insert_done(m, uid):
     name = m.text.strip()
     fname = user_insert_info[uid]['old'] if name=="原文件名" else name
     go_insert_batch(m.chat.id, uid, fname)
 
-# ==================== 核心修复：10个打包一起发，不再单发 ====================
+# ==================== 核心功能：10个打包一起发 ====================
 def go_batch_split(cid, uid, content, name):
     user = get_user(uid)
     lines = [x for x in content.splitlines() if x.strip()]
@@ -266,7 +265,7 @@ def go_batch_split(cid, uid, content, name):
             bot.send_media_group(cid, media=media_list)
             bot.send_message(cid,f"✅ 已发送 {page}/{total_file} 份")
             media_list = []
-            time.sleep(1)
+            time.sleep(1)  # 避免触发Telegram频率限制
         page += 1
 
     # 剩余不足10个收尾发送
@@ -324,7 +323,7 @@ def go_insert_batch(cid, uid, fname):
     bot.send_message(cid,f"🎉 全部插入分割完成！")
     del user_insert_info[uid]
 
-# ==================== 其他原有功能不变 ====================
+# ==================== 其他功能 ====================
 def set_lines(msg):
     try:
         get_user(msg.from_user.id)['split_lines'] = int(msg.text)
@@ -371,7 +370,33 @@ def doc(msg):
         else:
             user_file[uid] = {"n": msg.document.file_name, "c": txt}
             bot.send_message(cid, "📄 请选择", reply_markup=insert_choose_menu())
-    except:
+    except Exception as e:
+        print(f"文件处理错误：{e}")
         bot.send_message(cid, "❌ 文件错误")
 
-bot.polling(none_stop=True)
+# 处理合并完成指令
+@bot.message_handler(func=lambda msg: user_state.get(msg.from_user.id) == "merging" and msg.text.strip() == "完成")
+def merge_done(msg):
+    uid = msg.from_user.id
+    cid = msg.chat.id
+    if not user_merge_temp.get(uid):
+        bot.send_message(cid, "❌ 无文件")
+        return
+    content = "\n".join(user_merge_temp[uid])
+    lines = [x for x in content.splitlines() if x.strip()]
+    total = len(lines)
+    user = get_user(uid)
+    fee = total * PRICE_MERGE
+    if user['balance'] < fee:
+        bot.send_message(cid, f"❌ 不足{fee:.4f}")
+        return
+    user['balance'] -= fee
+    add_log(uid, "TXT合并", total, fee)
+    out = BytesIO(content.encode())
+    out.name = "合并.txt"
+    bot.send_document(cid, out)
+    bot.send_message(cid,f"💸 扣费{fee:.4f}元 | 剩余余额：{user['balance']:.4f}")
+    del user_merge_temp[uid]
+    user_state[uid] = "idle"
+
+bot.polling(none_stop=True, timeout=60)  # 增加超时防止卡住
