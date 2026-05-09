@@ -89,7 +89,6 @@ def extract_txt_from_zip(zip_bytes):
     except Exception as e:
         return ""
 
-# 修复分页按钮重复BUG
 def page_btn(log_type, now_page, total_page):
     kb = telebot.types.InlineKeyboardMarkup(row_width=5)
     btn = []
@@ -130,7 +129,7 @@ def admin_kb():
     kb.add(telebot.types.InlineKeyboardButton("➕单人手动加余额",callback_data="addbal"),telebot.types.InlineKeyboardButton("➖单人扣余额",callback_data="subbal"))
     kb.add(telebot.types.InlineKeyboardButton("🎟️批量生成卡密",callback_data="card"),telebot.types.InlineKeyboardButton("📊全部用户余额总表",callback_data="ulist"))
     kb.add(telebot.types.InlineKeyboardButton("📋全站充值记录",callback_data="rc_page_1"),telebot.types.InlineKeyboardButton("📋全站消费记录",callback_data="use_page_1"))
-    kb.add(telebot.types.InlineKeyboardButton("📢全站广播",callback_data="broad"),telebot.types.InlineKeyboardButton("🔥批量加用户余额",callback_data="batch_addbal"))
+    kb.add(telebot.types.InlineKeyboardButton("📢全站广播",callback_data="broad"),telebot.types.InlineKeyboardButton("🔥批量加用户余额",callback_data="batch_addbal_start"))
     kb.add(telebot.types.InlineKeyboardButton("🎫查看所有有效卡密",callback_data="check_all_cdk"))
     kb.add(telebot.types.InlineKeyboardButton("🗑️作废指定卡密",callback_data="del_cdk"),telebot.types.InlineKeyboardButton("📤导出全部有效卡密",callback_data="export_cdk"))
     kb.add(telebot.types.InlineKeyboardButton("🔙返回",callback_data="back"))
@@ -141,7 +140,6 @@ def select_menu():
     kb.add(telebot.types.InlineKeyboardButton("⚡插入雷号分割",callback_data="ins"),telebot.types.InlineKeyboardButton("📄纯净直接分割",callback_data="noins"))
     return kb
 
-# 数字跳转页码
 @bot.message_handler(func=lambda msg: msg.text.isdigit())
 def jump_page(msg):
     uid = msg.from_user.id
@@ -290,6 +288,12 @@ def cb(c):
         bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
         return
 
+    # 修复批量加余额 按钮无响应
+    if d == "batch_addbal_start":
+        bot.edit_message_text("🔥批量充值格式：\n用户ID 金额\n一行一个\n例：\n123456 10\n789012 5",cid,c.message.message_id)
+        bot.register_next_step_handler(c.message, batch_add_user_balance)
+        return
+
     if d.startswith("my_rc_"):
         page = int(d.split("_")[-1])
         page_temp[uid] = "my_rc"
@@ -339,7 +343,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📋全站消费记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("use_page",page,tp))
+        bot.edit_message(cid, c.message.message_id, reply_markup=page_btn("use_page",page,tp))
         return
 
     if d=="mode":
@@ -400,12 +404,13 @@ def cb(c):
         bot.send_message(cid,"📢先发图片，再发文字")
         bot.register_next_step_handler(c.message, admin_broadcast)
     elif d=="batch_addbal" and is_admin(uid):
-        batch_add_user_balance(msg)
+        bot.send_message(cid,"请发送批量用户ID+金额")
+        bot.register_next_step_handler(c.message, batch_add_user_balance)
     elif d=="ins":
         if uid not in user_file:
             return bot.send_message(cid,"请先上传文件")
         bot.send_message(cid,"每份插入几条雷号？")
-        bot.register_next_step_handler(c.message,ins_num)
+        bot.register_next_step_handler(c.message, ins_num)
     elif d=="noins":
         if uid not in user_file:
             return bot.send_message(cid,"请先上传文件")
@@ -579,7 +584,6 @@ def ins_done(m):
     if uid in user_file:del user_file[uid]
     if uid in user_insert:del user_insert[uid]
 
-# 修复VCF缩进致命BUG
 def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
