@@ -36,7 +36,6 @@ user_state = {}
 user_insert = {}
 log_user = {}
 log_recharge = {}
-# 记录当前用户正在查看哪种分页，用来跳转页码
 page_temp = {}
 
 def get_user(uid):
@@ -90,7 +89,7 @@ def extract_txt_from_zip(zip_bytes):
     except Exception as e:
         return ""
 
-# 分页按钮+跳转提示
+# 修复分页按钮重复BUG
 def page_btn(log_type, now_page, total_page):
     kb = telebot.types.InlineKeyboardMarkup(row_width=5)
     btn = []
@@ -103,8 +102,7 @@ def page_btn(log_type, now_page, total_page):
         btn.append(telebot.types.InlineKeyboardButton("⏭尾页", callback_data=f"{log_type}_{total_page}"))
     kb.add(*btn)
     kb.add(telebot.types.InlineKeyboardButton("🔙返回个人中心", callback_data="return_user"))
-    kb.add(telebot.types.InlineKeyboardButton("📘直接发数字跳转页码", callback_data="none"))
-    kb.add(*btn)
+    kb.add(telebot.types.InlineKeyboardButton("📘发数字直接跳转页码", callback_data="none"))
     return kb
 
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
@@ -143,7 +141,7 @@ def select_menu():
     kb.add(telebot.types.InlineKeyboardButton("⚡插入雷号分割",callback_data="ins"),telebot.types.InlineKeyboardButton("📄纯净直接分割",callback_data="noins"))
     return kb
 
-# 处理用户发送数字跳转页码
+# 数字跳转页码
 @bot.message_handler(func=lambda msg: msg.text.isdigit())
 def jump_page(msg):
     uid = msg.from_user.id
@@ -177,7 +175,7 @@ def jump_page(msg):
 
     st = (page-1)*PAGE_NUM
     ed = page*PAGE_NUM
-    txt = f"💳跳转成功｜第{page}/{tp}页\n"+"\n".join(log[st:ed])
+    txt = f"💳跳转成功｜第{page}/{tp}页\n"+"\n".join(log[st:ed])[:4000]
     bot.edit_message_text(txt, msg.chat.id, msg.message_id-1, reply_markup=page_btn(log_type,page,tp))
 
 @bot.message_handler(commands=['start'])
@@ -292,7 +290,6 @@ def cb(c):
         bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
         return
 
-    # 个人充值记录
     if d.startswith("my_rc_"):
         page = int(d.split("_")[-1])
         page_temp[uid] = "my_rc"
@@ -301,11 +298,10 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"💳我的充值记录 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])
+        txt = f"💳我的充值记录 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
         bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_rc",page,tp))
         return
 
-    # 个人消费记录
     if d.startswith("my_use_"):
         page = int(d.split("_")[-1])
         page_temp[uid] = "my_use"
@@ -314,11 +310,10 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"📜我的消费明细 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])
+        txt = f"📜我的消费明细 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
         bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_use",page,tp))
         return
 
-    # 全站充值
     if d.startswith("rc_page_"):
         page = int(d.split("_")[-1])
         page_temp[uid] = "rc_page"
@@ -329,11 +324,10 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"📋全站充值记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])
+        txt = f"📋全站充值记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
         bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("rc_page",page,tp))
         return
 
-    # 全站消费
     if d.startswith("use_page_"):
         page = int(d.split("_")[-1])
         page_temp[uid] = "use_page"
@@ -344,7 +338,7 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"📋全站消费记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])
+        txt = f"📋全站消费记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
         bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("use_page",page,tp))
         return
 
@@ -406,8 +400,7 @@ def cb(c):
         bot.send_message(cid,"📢先发图片，再发文字")
         bot.register_next_step_handler(c.message, admin_broadcast)
     elif d=="batch_addbal" and is_admin(uid):
-        bot.send_message(cid,"格式：ID 金额，一行一个")
-        bot.register_next_step_handler(c.message, batch_add_user_balance)
+        batch_add_user_balance(msg)
     elif d=="ins":
         if uid not in user_file:
             return bot.send_message(cid,"请先上传文件")
@@ -542,7 +535,6 @@ def ins_done(m):
     batch_num = 1
     ph_idx = 0
     phones = info['phone']
-    csv_rows = "分包,位置,原号,雷号\n"
 
     for c in chunk:
         chunk_len = len(c)
@@ -553,7 +545,6 @@ def ins_done(m):
         for pos in insert_pos_list:
             lei = phones[ph_idx % len(phones)]
             temp_list.insert(pos-1, lei)
-            csv_rows += f"{file_idx},{pos},{c[pos-1]},{lei}\n"
             ph_idx += 1
 
         if u['mode']=="VCF":
@@ -583,14 +574,12 @@ def ins_done(m):
         bot.send_message(cid,f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         bot.send_media_group(cid, media)
 
-    csv_bio = BytesIO(csv_rows.encode("utf-8-sig"))
-    csv_bio.name = "插雷明细.csv"
-    bot.send_document(cid, csv_bio)
     bot.send_message(cid,f"✅插雷分包全部完成\n当前北京时间：{get_beijing_time_str()}")
 
     if uid in user_file:del user_file[uid]
     if uid in user_insert:del user_insert[uid]
 
+# 修复VCF缩进致命BUG
 def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
@@ -614,8 +603,8 @@ def split_send_clean(cid,uid,txt,name):
             for p in c:
                 n=get_rand_3_name()
                 vcf+=f"BEGIN:VCARD\nVERSION:3.0\nN:{n};;;\nFN:{n}\nTEL:{p}\nEND:VCARD\n"
-        bio=BytesIO(vcf.encode())
-        bio.name=f"{name}_{file_idx}.vcf"
+            bio=BytesIO(vcf.encode())
+            bio.name=f"{name}_{file_idx}.vcf"
         else:
             bio=BytesIO("\n".join(c).encode())
             bio.name=f"{name}_{file_idx}.txt"
@@ -686,5 +675,5 @@ while True:
     try:
         bot.polling(none_stop=True)
     except Exception as e:
-        print(e)
-        time.sleep(5)
+        print("报错：",e)
+        time.sleep(3)
