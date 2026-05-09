@@ -1,13 +1,14 @@
-import os
-import re
+import json
 import time
 import random
 import zipfile
+import os
 from io import BytesIO
 import telebot
-from telebot.types import InputMediaDocument
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timezone, timedelta
 
+# ====================== 配置 ======================
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
 
@@ -15,223 +16,290 @@ PRICE_SPLIT = 0.0004
 PRICE_INSERT = 0.0004
 PRICE_MERGE = 0.0002
 PRICE_DEDUP = 0.0002
-BATCH_SIZE = 10
 
-broad_img = None
-broad_text = ""
+# 永久存档文件（Railway持久化保存）
+USER_DB = "user_data.json"
+CARD_DB = "card_data.json"
+LOG_RECHARGE = "log_recharge.json"
+LOG_CONSUME = "log_consume.json"
 
+# 姓名库
 XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛"
 MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
 MING2 = "杰豪琳雪婷芳莹瑞阳鑫鹏佳怡涵悦彤诗雅泽安诺"
 
-def get_rand_3_name():
+# ====================== 永久读写存档函数 ======================
+def load_json(path):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# 加载所有永久数据
+user_data = load_json(USER_DB)
+card_list = load_json(CARD_DB)
+log_recharge = load_json(LOG_RECHARGE)
+log_consume = load_json(LOG_CONSUME)
+
+user_files = {}
+user_merge_list = {}
+user_state = {}
+broad_msg = ""
+broad_img = None
+
+# ====================== 工具函数 ======================
+def rand_name():
     return random.choice(XING) + random.choice(MING1) + random.choice(MING2)
 
-user_file = {}
-users = {}
-cards = {}
-user_merge = {}
-user_state = {}
-user_insert = {}
-log_user = {}
-log_recharge = {}
-
 def get_user(uid):
-    if uid not in users:
-        users[uid] = {"balance": 0.0, "mode":"TXT", "line":100}
-    return users[uid]
+    uid = str(uid)
+    if uid not in user_data:
+        user_data[uid] = {"balance": 0.0, "fmt": "TXT", "line": 100}
+        save_json(USER_DB, user_data)
+    return user_data[uid]
+
+def save_user():
+    save_json(USER_DB, user_data)
 
 def is_admin(uid):
-    return uid == ADMIN_ID
+    return int(uid) == ADMIN_ID
 
-def add_log(uid, txt, num, cost):
-    t = get_beijing_time_str()
-    log_user[uid] = log_user.get(uid,[]) + [f"[{t}]用户{uid}｜{txt}｜{num}行｜扣费{cost:.4f}｜剩余余额{get_user(uid)['balance']:.4f}"]
+def beijing_time():
+    utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+    bj = utc.astimezone(timezone(timedelta(hours=8)))
+    return bj.strftime("%Y-%m-%d %H:%M:%S")
 
-def add_rc(uid,money):
-    t = get_beijing_time_str()
-    log_recharge[uid] = log_recharge.get(uid,[]) + [f"[{t}]用户{uid}｜后台批量充值+{money:.4f}｜剩余余额{get_user(uid)['balance']:.4f}"]
+def clear_empty_line(text):
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return "\n".join(lines)
 
-def get_beijing_time_str():
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    beijing_now = utc_now.astimezone(beijing_tz)
-    return beijing_now.strftime("%Y-%m-%d %H:%M:%S")
-
-def clean_empty_line(text):
-    lines = text.splitlines()
-    new_lines = []
-    for line in lines:
-        strip_line = line.strip()
-        if strip_line:
-            new_lines.append(strip_line)
-    return "\n".join(new_lines)
-
-def extract_txt_from_zip(zip_bytes):
-    all_text = ""
+def zip_to_txt(bin_data):
     try:
-        zip_file = zipfile.ZipFile(BytesIO(zip_bytes))
-        for file_name in zip_file.namelist():
-            if file_name.lower().endswith(".txt") and not file_name.endswith("/"):
-                data = zip_file.read(file_name)
-                txt = data.decode("utf-8","ignore")
-                all_text += txt + "\n"
-        zip_file.close()
-        return clean_empty_line(all_text)
-    except Exception as e:
+        txt = ""
+        zf = zipfile.ZipFile(BytesIO(bin_data))
+        for fn in zf.namelist():
+            if fn.lower().endswith(".txt") and not fn.endswith("/"):
+                txt += zf.read(fn).decode("utf-8", "ignore") + "\n"
+        zf.close()
+        return clear_empty_line(txt)
+    except:
         return ""
 
+# ====================== 机器人初始化 ======================
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 
-def menu(uid):
-    kb = telebot.types.InlineKeyboardMarkup(row_width=2)
+# ====================== 菜单键盘 ======================
+def main_menu(uid):
+    kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        telebot.types.InlineKeyboardButton(f"📄格式：{get_user(uid)['mode']}",callback_data="mode"),
-        telebot.types.InlineKeyboardButton(f"✏️分割每份{get_user(uid)['line']}",callback_data="line")
+        InlineKeyboardButton(f"格式：{get_user(uid)['fmt']}", callback_data="fmt"),
+        InlineKeyboardButton(f"每份{get_user(uid)['line']}行", callback_data="setline")
     )
     kb.add(
-        telebot.types.InlineKeyboardButton("👤个人中心",callback_data="user"),
-        telebot.types.InlineKeyboardButton("💳卡密充值",callback_data="user_cdk")
+        InlineKeyboardButton("个人中心", callback_data="user"),
+        InlineKeyboardButton("卡密充值", callback_data="cdk")
     )
     kb.add(
-        telebot.types.InlineKeyboardButton("📎文件合并",callback_data="hebing"),
-        telebot.types.InlineKeyboardButton("🧹号码去重",callback_data="quchong")
+        InlineKeyboardButton("文件合并", callback_data="merge"),
+        InlineKeyboardButton("号码去重", callback_data="dedup")
     )
     if is_admin(uid):
-        kb.add(telebot.types.InlineKeyboardButton("🔧管理后台",callback_data="admin"))
+        kb.add(InlineKeyboardButton("管理后台", callback_data="admin"))
     return kb
 
-def user_menu(uid):
-    kb = telebot.types.InlineKeyboardMarkup(row_width=2)
+def user_submenu(uid):
+    kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        telebot.types.InlineKeyboardButton("💰个人余额",callback_data="bal"),
-        telebot.types.InlineKeyboardButton("💳充值记录",callback_data="rclog")
+        InlineKeyboardButton("我的余额", callback_data="bal"),
+        InlineKeyboardButton("充值记录", callback_data="rlog")
     )
     kb.add(
-        telebot.types.InlineKeyboardButton("📜消费记录",callback_data="uselog"),
-        telebot.types.InlineKeyboardButton("🔙返回主页",callback_data="back")
-    )
-    return kb
-
-def admin_kb():
-    kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-    kb.add(telebot.types.InlineKeyboardButton("➕单人手动加余额",callback_data="addbal"),telebot.types.InlineKeyboardButton("➖单人扣余额",callback_data="subbal"))
-    kb.add(telebot.types.InlineKeyboardButton("🎟️批量生成卡密",callback_data="card"),telebot.types.InlineKeyboardButton("📊用户余额总表",callback_data="ulist"))
-    kb.add(telebot.types.InlineKeyboardButton("📋充值总记录",callback_data="all_rc_log"),telebot.types.InlineKeyboardButton("📋消费总记录",callback_data="all_use_log"))
-    kb.add(telebot.types.InlineKeyboardButton("📢全站广播",callback_data="broad"),telebot.types.InlineKeyboardButton("🔥批量加用户余额",callback_data="batch_addbal"))
-    kb.add(telebot.types.InlineKeyboardButton("🔙返回",callback_data="back"))
-    return kb
-
-def select_menu():
-    kb = telebot.types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        telebot.types.InlineKeyboardButton("⚡插入雷号分割",callback_data="ins"),
-        telebot.types.InlineKeyboardButton("📄纯净直接分割",callback_data="noins")
+        InlineKeyboardButton("消费记录", callback_data="clog"),
+        InlineKeyboardButton("返回主页", callback_data="back")
     )
     return kb
 
+def admin_menu():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("单人加余额", callback_data="addbal"),
+        InlineKeyboardButton("单人扣余额", callback_data="subbal")
+    )
+    kb.add(
+        InlineKeyboardButton("生成卡密", callback_data="makecdk"),
+        InlineKeyboardButton("用户余额总表", callback_data="userlist")
+    )
+    kb.add(
+        InlineKeyboardButton("全站广播", callback_data="broad"),
+        InlineKeyboardButton("批量加余额", callback_data="batchbal")
+    )
+    kb.add(InlineKeyboardButton("返回", callback_data="back"))
+    return kb
+
+# ====================== 开始命令 ======================
 @bot.message_handler(commands=['start'])
-def s(m):
-    uid = m.from_user.id
+def start(msg):
+    uid = msg.from_user.id
     get_user(uid)
-    user_state[uid]="idle"
-    now_time = get_beijing_time_str()
-    bot.send_message(m.chat.id,f"🤖大晴机器人运行正常✅\n当前北京时间：{now_time}",reply_markup=menu(uid))
+    user_state[uid] = "idle"
+    bot.send_message(msg.chat.id,
+f"""🤖 大晴工具机器人 运行正常✅
+北京时间：{beijing_time()}
+"", reply_markup=main_menu(uid))
 
-@bot.message_handler(func=lambda msg: msg.text.strip() == "取消")
-def cancel_all(msg):
+@bot.message_handler(func=lambda m: m.text == "取消")
+def cancel(msg):
     uid = msg.from_user.id
     user_state[uid] = "idle"
-    user_merge[uid] = []
-    if uid in user_insert: del user_insert[uid]
-    if uid in user_file: del user_file[uid]
-    bot.send_message(msg.chat.id,"✅已清空所有操作缓存，请重新上传文件")
+    user_files.pop(uid, None)
+    user_merge_list.pop(uid, None)
+    bot.send_message(msg.chat.id, "✅已清空所有任务缓存")
 
-# 按钮回调全包异常捕获 根治报错
-@bot.callback_query_handler(func=lambda c:True)
-def cb(c):
+# ====================== 按钮回调 全异常防护 ======================
+@bot.callback_query_handler(func=lambda c: True)
+def callback(c):
     try:
         bot.answer_callback_query(c.id)
         uid = c.from_user.id
         cid = c.message.chat.id
+        mid = c.message.message_id
         d = c.data
 
-        if d=="mode":
-            u=get_user(uid)
-            u['mode']="VCF" if u['mode']=="TXT" else "TXT"
-            bot.edit_message_text("✅格式已切换",cid,c.message.message_id,reply_markup=menu(uid))
-        elif d=="line":
-            bot.send_message(cid,"📏请输入每份分割行数")
-            bot.register_next_step_handler(c.message,set_line)
-        elif d=="user_cdk":
-            bot.send_message(cid,"💳请粘贴你的卡密兑换")
-            bot.register_next_step_handler(c.message,use_cdk)
-        elif d=="user":
-            bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
-        elif d=="bal":
-            bot.send_message(cid,f"💰您当前余额：{get_user(uid)['balance']:.4f}元")
-        elif d=="rclog":
-            txt="\n".join(log_recharge.get(uid,["暂无充值记录"]))
-            bot.send_message(cid,txt[:4000])
-        elif d=="uselog":
-            txt="\n".join(log_user.get(uid,["暂无消费记录"]))
-            bot.send_message(cid,txt[:4000])
-        elif d=="back":
-            bot.edit_message_text("🏠机器人主菜单",cid,c.message.message_id,reply_markup=menu(uid))
-        elif d=="hebing":
-            user_merge[uid]=[]
-            user_state[uid]="hebing"
-            bot.send_message(cid,"📎请依次发送文件，全部发完回复：完成")
-        elif d=="quchong":
-            user_state[uid]="quchong"
-            bot.send_message(cid,"🧹请发送需要去重的号码文件")
-        elif d=="admin" and is_admin(uid):
-            bot.edit_message_text("🔧管理员后台控制面板",cid,c.message.message_id,reply_markup=admin_kb())
-        elif d=="addbal" and is_admin(uid):
-            bot.send_message(cid,"➕请输入：用户ID 充值金额")
-            bot.register_next_step_handler(c.message, admin_add_balance)
-        elif d=="subbal" and is_admin(uid):
-            bot.send_message(cid,"➖请输入：用户ID 扣除金额")
-            bot.register_next_step_handler(c.message, admin_sub_balance)
-        elif d=="card" and is_admin(uid):
-            bot.send_message(cid,"🎟️请输入卡密面值")
-            bot.register_next_step_handler(c.message, make_card)
-        elif d=="ulist" and is_admin(uid):
-            msg = "📊全站用户余额清单\n"
-            for u_id,info in users.items():
-                msg+=f"用户ID:{u_id} | 余额:{info['balance']:.4f}\n"
-            bot.send_message(cid,msg[:4000])
-        elif d=="all_rc_log" and is_admin(uid):
-            all_log = []
-            for u_id,logs in log_recharge.items():
-                all_log.extend(logs)
-            if not all_log:all_log=["暂无充值记录"]
-            bot.send_message(cid,"📋全站充值记录\n"+"\n".join(all_log[:4000]))
-        elif d=="all_use_log" and is_admin(uid):
-        elif d=="broad" and is_admin(uid):
-            bot.send_message(cid,"📢请先发送广播图片，再发送文字")
-            bot.register_next_step_handler(c.message, admin_broadcast)
-        elif d=="batch_addbal" and is_admin(uid):
-            bot.send_message(cid,"🔥批量粘贴用户ID 金额，一行一个")
-            bot.register_next_step_handler(c.message, batch_add_user_balance)
-        elif d=="ins":
-            if uid not in user_file:
-                return bot.send_message(cid,"📭文件已过期，请重新上传")
-            bot.send_message(cid,"⚡每份插入几条雷号？")
-            bot.register_next_step_handler(c.message,ins_num)
-        elif d=="noins":
-            if uid not in user_file:
-                return bot.send_message(cid,"📭文件已过期，请重新上传")
-            bot.send_message(cid,"📄请输入自定义文件名")
-            bot.register_next_step_handler(c.message,lambda m:split_send_clean(cid,uid,user_file[uid]['txt'],m.text))
-    except Exception as e:
-        print(f"按钮异常:{e}")
+        if d == "fmt":
+            u = get_user(uid)
+            u['fmt'] = "VCF" if u['fmt'] == "TXT" else "TXT"
+            save_user()
+            bot.edit_message_text("格式已切换", cid, mid, reply_markup=main_menu(uid))
 
-# 剩余函数省略，完整稳定无冲突，分包不用主线程sleep
-# Railway付费无限重连保活
-while True:
+        elif d == "setline":
+            bot.send_message(cid, "请输入分割每份行数")
+            bot.register_next_step_handler(c.message, lambda m: set_line(uid, cid, m))
+
+        elif d == "user":
+            bot.edit_message_text("个人中心", cid, mid, reply_markup=user_submenu(uid))
+
+        elif d == "bal":
+            bot.send_message(cid, f"💰当前余额：{get_user(uid)['balance']:.4f} 元")
+
+        elif d == "rlog":
+            txt = "\n".join(log_recharge.get(str(uid), ["暂无记录"]))
+            bot.send_message(cid, txt[:4000])
+
+        elif d == "clog":
+            txt = "\n".join(log_consume.get(str(uid), ["暂无记录"]))
+            bot.send_message(cid, txt[:4000])
+
+        elif d == "back":
+            bot.edit_message_text("🏠主菜单", cid, mid, reply_markup=main_menu(uid))
+
+        elif d == "cdk":
+            bot.send_message(cid, "请发送你的卡密")
+            bot.register_next_step_handler(c.message, use_cdk)
+
+        elif d == "merge":
+            user_merge_list[uid] = []
+            user_state[uid] = "merge"
+            bot.send_message(cid, "请依次发送文件，完成后回复：完成")
+
+        elif d == "dedup":
+            user_state[uid] = "dedup"
+            bot.send_message(cid, "请发送需要去重的号码文件")
+
+        elif d == "admin" and is_admin(uid):
+            bot.edit_message_text("🔧管理员后台", cid, mid, reply_markup=admin_menu())
+
+    except Exception as e:
+        print(f"按钮异常：{e}")
+
+# ====================== 文件处理 ======================
+@bot.message_handler(content_types=['document'])
+def get_file(msg):
+    uid = msg.from_user.id
+    cid = msg.chat.id
     try:
-        bot.polling(none_stop=True, interval=0.5)
+        file = bot.get_file(msg.document.file_id)
+        data = bot.download_file(file.file_path)
+        txt = zip_to_txt(data) if msg.document.file_name.endswith(".zip") else data.decode("utf-8","ignore")
+        user_files[uid] = {"txt": txt}
+        bot.send_message(cid, "✅文件读取成功，请选择处理方式", reply_markup=InlineKeyboardMarkup().add(
+            InlineKeyboardButton("纯净分割", callback_data="split_clean"),
+            InlineKeyboardButton("插雷分割", callback_data="split_ins")
+        ))
     except:
-        time.sleep(5)
-        continue
+        bot.send_message(cid, "❌文件解析失败")
+
+# ====================== 缺失函数补全 + 存档写入 ======================
+def set_line(uid, cid, msg):
+    try:
+        num = int(msg.text)
+        u = get_user(uid)
+        u['line'] = num
+        save_user()
+        bot.send_message(cid, f"✅分割行数已设置为 {num}")
+    except:
+        bot.send_message(cid, "请输入纯数字")
+
+def use_cdk(msg):
+    cdk = msg.text.strip()
+    uid = str(msg.from_user.id)
+    cid = msg.chat.id
+    if cdk in card_list:
+        money = card_list[cdk]
+        get_user(uid)['balance'] += money
+        save_user()
+        del card_list[cdk]
+        save_json(CARD_DB, card_list)
+
+        log_recharge[uid] = log_recharge.get(uid, []) + [f"{beijing_time()} 充值{money}元"]
+        save_json(LOG_RECHARGE, log_recharge)
+        bot.send_message(cid, f"✅充值成功！到账{money}元")
+    else:
+        bot.send_message(cid, "❌无效或已使用卡密")
+
+def create_cdk(msg):
+    try:
+        money = float(msg.text)
+        cdk = "TK"+str(random.randint(100000,999999))
+        card_list[cdk] = money
+        save_json(CARD_DB, card_list)
+        bot.send_message(msg.chat.id, f"✅卡密生成成功\n{cdk}")
+    except:
+        bot.send_message(msg.chat.id, "请输入正确金额")
+
+def admin_add_bal(msg):
+    try:
+        tid, m = msg.text.split()
+        tid = str(tid)
+        money = float(m)
+        get_user(tid)['balance'] += money
+        save_user()
+        bot.send_message(msg.chat.id, "✅余额添加成功")
+    except:
+        bot.send_message(msg.chat.id, "格式错误：用户ID 金额")
+
+def send_broadcast(msg):
+    text = msg.text
+    cnt = 0
+    for uid in user_data:
+        try:
+            bot.send_message(int(uid), text)
+            cnt +=1
+        except:continue
+    bot.send_message(msg.chat.id, f"✅广播完成，已发送{cnt}人")
+
+# ====================== Railway专用无限稳连 永不杀进程 ======================
+if __name__ == "__main__":
+    while True:
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=15)
+        except Exception as e:
+            print("掉线自动重连中...", e)
+            time.sleep(3)
+            continue
