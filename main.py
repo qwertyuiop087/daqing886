@@ -239,7 +239,6 @@ def admin_cmd(msg):
         except:
             bot.send_message(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-# 兼容旧版telebot，不用ContentTypes也能接收图片
 @bot.message_handler(content_types=['photo'])
 def broadcast_photo(msg):
     if not is_admin(msg.from_user.id):
@@ -301,7 +300,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"💳我的充值记录 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_rc",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("my_rc",page,tp))
         return
 
     if d.startswith("my_use_"):
@@ -313,7 +312,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📜我的消费明细 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_use",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("my_use",page,tp))
         return
 
     if d.startswith("rc_page_"):
@@ -326,8 +325,8 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"📋全站充值记录 第{page}/{tp}位\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("rc_page",page,tp))
+        txt = f"📋全站充值记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
+        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("rc_page",page,tp))
         return
 
     if d.startswith("use_page_"):
@@ -341,7 +340,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📋全站消费记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("use_page",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("use_page",page,tp))
         return
 
     if d=="mode":
@@ -453,13 +452,13 @@ def use_cdk(m):
     info=cards[cdk]
     if info['expire_time']<now:
         del cards[cdk]
-        bot.send_message(m.chat.id,"❌该卡密已过期")
-        return
-    money = info['money']
-    cards.pop(cdk)
-    get_user(m.from_user.id)['balance']+=money
-    add_rc(m.from_user.id,money)
-    bot.send_message(m.chat.id,f"✅充值到账{money:.4f}元\n余额：{get_user(m.from_user.id)['balance']:.4f}")
+    bot.send_message(m.chat.id,"❌该卡密已过期")
+    return
+money = info['money']
+cards.pop(cdk)
+get_user(m.from_user.id)['balance']+=money
+add_rc(m.from_user.id,money)
+bot.send_message(m.chat.id,f"✅充值到账{money:.4f}元\n余额：{get_user(m.from_user.id)['balance']:.4f}")
 
 def batch_add_user_balance(msg):
     if not is_admin(msg.from_user.id):
@@ -478,7 +477,7 @@ def batch_add_user_balance(msg):
             get_user(uid)['balance']+=money
             add_rc(uid,money)
             success+=1
-        else:fail.append(line)
+        except:fail.append(line)
     reply=f"✅批量充值完成\n成功：{success} 用户"
     if fail:reply+=f"\n失败格式：{len(fail)}条"
     bot.send_message(cid,reply)
@@ -580,6 +579,10 @@ def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
     fee=total*PRICE_SPLIT
+    u=get_user(uid)
+    if u['balance']<fee:
+        bot.send_message(cid,"❌余额不足")
+        return
     u['balance']-=fee
     add_log(uid,"纯净分包",total,fee)
     bot.send_message(cid,f"扣费：{fee:.4f}｜剩余：{u['balance']:.4f}")
@@ -614,7 +617,7 @@ def split_send_clean(cid,uid,txt,name):
         bot.send_message(cid,f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         bot.send_media_group(cid,media)
 
-    bot.send_message(cid,f"✅纯净分包全部完成")
+    bot.send_message(cid,f"✅纯净分包全部完成\n当前北京时间：{get_beijing_time_str()}")
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
@@ -632,7 +635,7 @@ def doc(m):
             else:txt=data.decode("utf-8","ignore")
             txt=clean_empty_line(txt)
             user_merge[uid].append(txt)
-            bot.send_message(m.chat.id,f"已收录第{len(user_merge[uid])}个文件")
+            bot.send_message(cid,f"已收录第{len(user_merge)}个文件")
             return
 
         if state=="quchong":
@@ -666,10 +669,10 @@ def doc(m):
         else:txt=data.decode("utf-8","ignore")
         txt=clean_empty_line(txt)
         user_file[uid]={"txt":txt}
-        bot.send_message(cid,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
+        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
 
-    except Exception:
-        bot.send_message(m.chat.id,"文件处理异常")
+    except Exception as e:
+        bot.send_message(m.chat.id,f"处理异常：{str(e)}")
 
 while True:
     try:
