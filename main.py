@@ -113,7 +113,7 @@ def menu(uid):
     kb.add(telebot.types.InlineKeyboardButton("💳卡密充值",callback_data="cdk_use"))
     kb.add(telebot.types.InlineKeyboardButton("📎文件合并",callback_data="hebing"),telebot.types.InlineKeyboardButton("🧹号码去重",callback_data="quchong"))
     if is_admin(uid):
-        kb.add(telebot.types.InlineKeyboardButton("🔧管理后台",callback_data="admin"))
+        kb.add(telebot.types.InlineKeyboardButton("🔙管理后台",callback_data="admin"))
     return kb
 
 def user_menu(uid):
@@ -500,8 +500,9 @@ def ins_num(m):
         bot.send_message(m.chat.id,"❌请输入纯数字")
 
 def ins_phone(m):
-    bot.send_message(m.chat.id,"❌流程失效")
-    return
+    uid=m.from_user.id
+    if uid not in user_insert:
+        return bot.send_message(m.chat.id,"❌流程失效")
     phones=re.findall(r"\d+",m.text)
     if len(phones)==0:
         bot.send_message(m.chat.id,"❌未识别号码，请重发")
@@ -545,7 +546,6 @@ def ins_done(m):
             lei = phones[ph_idx % len(phones)]
             temp_list.insert(pos-1, lei)
             ph_idx += 1
-
         if u['mode']=="VCF":
             vcf = ""
             for p in temp_list:
@@ -669,4 +669,14 @@ def doc(m):
         else:txt=data.decode("utf-8","ignore")
         txt=clean_empty_line(txt)
         user_file[uid]={"txt":txt}
-        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=
+        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
+
+    except Exception as e:
+        bot.send_message(m.chat.id,f"处理异常：{str(e)}")
+
+while True:
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print("报错：",e)
+        time.sleep(3)
