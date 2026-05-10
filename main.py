@@ -5,7 +5,7 @@ import zipfile
 import re
 from io import BytesIO
 import telebot
-from telebot.types import InputMediaDocument, ContentTypes
+from telebot.types import InputMediaDocument
 from datetime import datetime, timezone, timedelta
 
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
@@ -113,7 +113,7 @@ def menu(uid):
     kb.add(telebot.types.InlineKeyboardButton("💳卡密充值",callback_data="cdk_use"))
     kb.add(telebot.types.InlineKeyboardButton("📎文件合并",callback_data="hebing"),telebot.types.InlineKeyboardButton("🧹号码去重",callback_data="quchong"))
     if is_admin(uid):
-        kb.add(telebot.types.InlineKeyboardButton("🔙管理后台",callback_data="admin"))
+        kb.add(telebot.types.InlineKeyboardButton("🔧管理后台",callback_data="admin"))
     return kb
 
 def user_menu(uid):
@@ -171,7 +171,7 @@ def jump_page(msg):
     st = (page-1)*PAGE_NUM
     ed = page*PAGE_NUM
     txt = f"💳跳转成功｜第{page}/{tp}页\n"+"\n".join(log[st:ed])[:4000]
-    bot.edit_message_text(txt, msg.chat.id, msg.message_id, reply_markup=page_btn(log_type,page,tp))
+    bot.edit_message_text(txt, msg.chat.id, msg.message_id)
 
 @bot.message_handler(commands=['start'])
 def s(m):
@@ -239,7 +239,8 @@ def admin_cmd(msg):
         except:
             bot.send_message(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-@bot.message_handler(content_types=[ContentTypes.PHOTO])
+# 兼容旧版telebot，不用ContentTypes也能接收图片
+@bot.message_handler(content_types=['photo'])
 def broadcast_photo(msg):
     if not is_admin(msg.from_user.id):
         return
@@ -325,7 +326,7 @@ def cb(c):
         tp = (total + PAGE_NUM - 1) // PAGE_NUM
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
-        txt = f"📋全站充值记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
+        txt = f"📋全站充值记录 第{page}/{tp}位\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
         bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("rc_page",page,tp))
         return
 
@@ -477,7 +478,7 @@ def batch_add_user_balance(msg):
             get_user(uid)['balance']+=money
             add_rc(uid,money)
             success+=1
-        except:fail.append(line)
+        else:fail.append(line)
     reply=f"✅批量充值完成\n成功：{success} 用户"
     if fail:reply+=f"\n失败格式：{len(fail)}条"
     bot.send_message(cid,reply)
@@ -579,10 +580,6 @@ def split_send_clean(cid,uid,txt,name):
     lines=[x for x in txt.splitlines() if x]
     total=len(lines)
     fee=total*PRICE_SPLIT
-    u=get_user(uid)
-    if u['balance']<fee:
-        bot.send_message(cid,"❌余额不足")
-        return
     u['balance']-=fee
     add_log(uid,"纯净分包",total,fee)
     bot.send_message(cid,f"扣费：{fee:.4f}｜剩余：{u['balance']:.4f}")
@@ -617,11 +614,11 @@ def split_send_clean(cid,uid,txt,name):
         bot.send_message(cid,f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         bot.send_media_group(cid,media)
 
-    bot.send_message(cid,f"✅纯净分包全部完成\n当前北京时间：{get_beijing_time_str()}")
+    bot.send_message(cid,f"✅纯净分包全部完成")
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
-@bot.message_handler(content_types=[ContentTypes.DOCUMENT])
+@bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
     state = user_state.get(uid,"idle")
@@ -669,14 +666,14 @@ def doc(m):
         else:txt=data.decode("utf-8","ignore")
         txt=clean_empty_line(txt)
         user_file[uid]={"txt":txt}
-        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
+        bot.send_message(cid,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
 
-    except Exception as e:
-        bot.send_message(m.chat.id,f"处理异常：{str(e)}")
+    except Exception:
+        bot.send_message(m.chat.id,"文件处理异常")
 
 while True:
     try:
         bot.polling(none_stop=True)
     except Exception as e:
-        print("报错：",e)
+        print(e)
         time.sleep(3)
