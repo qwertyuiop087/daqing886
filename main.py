@@ -5,7 +5,7 @@ import zipfile
 import re
 from io import BytesIO
 import telebot
-from telebot.types import InputMediaDocument
+from telebot.types import InputMediaDocument, ContentTypes
 from datetime import datetime, timezone, timedelta
 
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
@@ -15,7 +15,6 @@ PRICE_SPLIT = 0.0004
 PRICE_INSERT = 0.0004
 PRICE_MERGE = 0.0002
 PRICE_DEDUP = 0.0002
-
 BATCH_SIZE = 10
 PAGE_NUM = 20
 
@@ -99,7 +98,7 @@ def page_btn(log_type, now_page, total_page):
     btn.append(telebot.types.InlineKeyboardButton(f"{now_page}/{total_page}", callback_data="none"))
     if now_page < total_page:
         btn.append(telebot.types.InlineKeyboardButton("下页➡", callback_data=f"{log_type}_{now_page+1}"))
-        btn.append(telebot.types.InlineKeyboardButton("⏭尾页", callback_data=f"_{total_page}"))
+        btn.append(telebot.types.InlineKeyboardButton("⏭尾页", callback_data=f"{log_type}_{total_page}"))
     kb.add(*btn)
     kb.add(telebot.types.InlineKeyboardButton("🔙返回个人中心", callback_data="return_user"))
     kb.add(telebot.types.InlineKeyboardButton("📘发数字直接跳转页码", callback_data="none"))
@@ -172,7 +171,7 @@ def jump_page(msg):
     st = (page-1)*PAGE_NUM
     ed = page*PAGE_NUM
     txt = f"💳跳转成功｜第{page}/{tp}页\n"+"\n".join(log[st:ed])[:4000]
-    bot.edit_message_text(txt, msg.chat.id, msg.message_id)
+    bot.edit_message_text(txt, msg.chat.id, msg.message_id, reply_markup=page_btn(log_type,page,tp))
 
 @bot.message_handler(commands=['start'])
 def s(m):
@@ -238,9 +237,9 @@ def admin_cmd(msg):
             log = log_user.get(uid,["该用户暂无消费记录"])
             bot.send_message(msg.chat.id,f"📋 用户{uid} 消费明细\n"+"\n".join(log)[:4000])
         except:
-            bot.send_message(msg.chat.id,"❌格式：插用户消费记录 用户ID")
+            bot.send_message(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-@bot.message_handler(content_types.photo)
+@bot.message_handler(content_types=[ContentTypes.PHOTO])
 def broadcast_photo(msg):
     if not is_admin(msg.from_user.id):
         return
@@ -501,9 +500,8 @@ def ins_num(m):
         bot.send_message(m.chat.id,"❌请输入纯数字")
 
 def ins_phone(m):
-    uid=m.from_user.id
-    if uid not in user_insert:
-        return bot.send_message(m.chat.id,"❌流程失效")
+    bot.send_message(m.chat.id,"❌流程失效")
+    return
     phones=re.findall(r"\d+",m.text)
     if len(phones)==0:
         bot.send_message(m.chat.id,"❌未识别号码，请重发")
@@ -527,10 +525,8 @@ def ins_done(m):
         bot.send_message(cid,"❌余额不足")
         return
     u['balance'] -= total_fee
-    # 插雷完整明细写入日志
     log_txt = f"插雷分包｜每份插{info['num']}个雷｜雷号：{','.join(info['phone'])}"
     add_log(uid, log_txt, total, total_fee)
-
     bot.send_message(cid,f"扣费：{total_fee:.4f}｜剩余：{u['balance']:.4f}")
 
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
@@ -589,7 +585,7 @@ def split_send_clean(cid,uid,txt,name):
         return
     u['balance']-=fee
     add_log(uid,"纯净分包",total,fee)
-    bot.send_message(cid,f"扣费：{fee:.4f}")
+    bot.send_message(cid,f"扣费：{fee:.4f}｜剩余：{u['balance']:.4f}")
 
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media=[]
@@ -621,11 +617,11 @@ def split_send_clean(cid,uid,txt,name):
         bot.send_message(cid,f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         bot.send_media_group(cid,media)
 
-    bot.send_message(cid,f"✅纯净分包全部完成")
+    bot.send_message(cid,f"✅纯净分包全部完成\n当前北京时间：{get_beijing_time_str()}")
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
-@bot.message_handler(content_types=['document'])
+@bot.message_handler(content_types=[ContentTypes.DOCUMENT])
 def doc(m):
     uid=m.from_user.id
     state = user_state.get(uid,"idle")
@@ -647,30 +643,24 @@ def doc(m):
             else:txt=data.decode("utf-8","ignore")
             txt=clean_empty_line(txt)
             old=len(txt.splitlines())
-
             seen = set()
             new_lines = []
             for line in txt.splitlines():
                 if line not in seen:
                     seen.add(line)
                     new_lines.append(line)
-
             new_txt = "\n".join(new_lines)
             new=len(new_lines)
-
             fee=new*PRICE_DEDUP
             u=get_user(uid)
             if u['balance']<fee:
                 bot.send_message(m.chat.id,"❌余额不足")
                 return
-
             u['balance']-=fee
             add_log(uid,f"号码去重｜原{old}行→去重后{new}行",new,fee)
-
             bio=BytesIO(new_txt.encode())
             bio.name="去重纯净号码.txt"
             bot.send_document(m.chat.id,bio)
-
             bot.send_message(m.chat.id,f"去重完成：旧{old}行→新{new}行\n扣费{fee:.4f}")
             user_state[uid]="idle"
             return
@@ -679,14 +669,4 @@ def doc(m):
         else:txt=data.decode("utf-8","ignore")
         txt=clean_empty_line(txt)
         user_file[uid]={"txt":txt}
-        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
-
-    except Exception as e:
-        bot.send_message(m.chat.id,f"处理异常：{str(e)}")
-
-while True:
-    try:
-        bot.polling(none_stop=True)
-    except Exception as e:
-        print("报错：",e)
-        time.sleep(3)
+        bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=
