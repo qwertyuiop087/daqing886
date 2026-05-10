@@ -147,6 +147,7 @@ def jump_page(msg):
         return
     log_type = page_temp[uid]
     page = int(msg.text)
+
     if log_type == "my_rc":
         log = log_recharge.get(uid, ["暂无充值记录"])
     elif log_type == "my_use":
@@ -163,15 +164,17 @@ def jump_page(msg):
         log = all
     else:
         return
+
     total = len(log)
     tp = (total + PAGE_NUM - 1) // PAGE_NUM
     if page < 1 or page > tp:
         bot.send_message(msg.chat.id,f"❌页码超出范围，最大页数：{tp}")
         return
+
     st = (page-1)*PAGE_NUM
     ed = page*PAGE_NUM
     txt = f"💳跳转成功｜第{page}/{tp}页\n"+"\n".join(log[st:ed])[:4000]
-    bot.edit_message_text(txt, msg.chat.id, msg.message_id)
+    bot.edit_message_text(txt, msg.chat.id, msg.message_id-1, reply_markup=page_btn(log_type,page,tp))
 
 @bot.message_handler(commands=['start'])
 def s(m):
@@ -247,7 +250,6 @@ def broadcast_photo(msg):
     broad_img = msg.photo[-1].file_id
     bot.send_message(msg.chat.id,"✅图片已保存，请发送广播文字内容")
 
-@bot.message_handler(func=lambda msg: broad_img != None)
 def admin_broadcast(msg):
     global broad_img, broad_text
     broad_text = msg.text
@@ -286,6 +288,7 @@ def cb(c):
         bot.edit_message_text("👤个人中心",cid,c.message.message_id,reply_markup=user_menu(uid))
         return
 
+    # 修复批量加余额 按钮无响应
     if d == "batch_addbal_start":
         bot.edit_message_text("🔥批量充值格式：\n用户ID 金额\n一行一个\n例：\n123456 10\n789012 5",cid,c.message.message_id)
         bot.register_next_step_handler(c.message, batch_add_user_balance)
@@ -300,7 +303,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"💳我的充值记录 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("my_rc",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_rc",page,tp))
         return
 
     if d.startswith("my_use_"):
@@ -312,7 +315,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📜我的消费明细 第{page}/{tp}页\n直接回复数字即可跳转对应页码\n"+"\n".join(log[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("my_use",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("my_use",page,tp))
         return
 
     if d.startswith("rc_page_"):
@@ -326,7 +329,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📋全站充值记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("rc_page",page,tp))
+        bot.edit_message_text(txt, cid, c.message.message_id, reply_markup=page_btn("rc_page",page,tp))
         return
 
     if d.startswith("use_page_"):
@@ -340,7 +343,7 @@ def cb(c):
         st = (page-1)*PAGE_NUM
         ed = page*PAGE_NUM
         txt = f"📋全站消费记录 第{page}/{tp}页\n直接回复数字跳转页码\n"+"\n".join(all[st:ed])[:4000]
-        bot.edit_message_text(txt, cid, c.message.message_id,reply_markup=page_btn("use_page",page,tp))
+        bot.edit_message(cid, c.message.message_id, reply_markup=page_btn("use_page",page,tp))
         return
 
     if d=="mode":
@@ -452,13 +455,13 @@ def use_cdk(m):
     info=cards[cdk]
     if info['expire_time']<now:
         del cards[cdk]
-    bot.send_message(m.chat.id,"❌该卡密已过期")
-    return
-money = info['money']
-cards.pop(cdk)
-get_user(m.from_user.id)['balance']+=money
-add_rc(m.from_user.id,money)
-bot.send_message(m.chat.id,f"✅充值到账{money:.4f}元\n余额：{get_user(m.from_user.id)['balance']:.4f}")
+        bot.send_message(m.chat.id,"❌该卡密已过期")
+        return
+    money = info['money']
+    cards.pop(cdk)
+    get_user(m.from_user.id)['balance']+=money
+    add_rc(m.from_user.id,money)
+    bot.send_message(m.chat.id,f"✅充值到账{money:.4f}元\n余额：{get_user(m.from_user.id)['balance']:.4f}")
 
 def batch_add_user_balance(msg):
     if not is_admin(msg.from_user.id):
@@ -522,12 +525,13 @@ def ins_done(m):
     fee_insert = total * PRICE_INSERT
     total_fee = fee_split + fee_insert
     u = get_user(uid)
+
     if u['balance'] < total_fee:
         bot.send_message(cid,"❌余额不足")
         return
+
     u['balance'] -= total_fee
-    log_txt = f"插雷分包｜每份插{info['num']}个雷｜雷号：{','.join(info['phone'])}"
-    add_log(uid, log_txt, total, total_fee)
+    add_log(uid,"分包+插雷",total,total_fee)
     bot.send_message(cid,f"扣费：{total_fee:.4f}｜剩余：{u['balance']:.4f}")
 
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
@@ -542,10 +546,12 @@ def ins_done(m):
         insert_pos_list = random.sample(range(1, chunk_len+1), info['num'])
         insert_pos_list.sort()
         temp_list = c.copy()
+
         for pos in insert_pos_list:
             lei = phones[ph_idx % len(phones)]
             temp_list.insert(pos-1, lei)
             ph_idx += 1
+
         if u['mode']=="VCF":
             vcf = ""
             for p in temp_list:
@@ -556,6 +562,7 @@ def ins_done(m):
         else:
             bio=BytesIO("\n".join(temp_list).encode())
             bio.name=f"{m.text}_{file_idx}.txt"
+
         media.append(InputMediaDocument(bio))
 
         if len(media) >= 10:
@@ -564,6 +571,7 @@ def ins_done(m):
             time.sleep(3)
             media = []
             batch_num += 1
+
         file_idx += 1
 
     if media:
@@ -572,6 +580,7 @@ def ins_done(m):
         bot.send_media_group(cid, media)
 
     bot.send_message(cid,f"✅插雷分包全部完成\n当前北京时间：{get_beijing_time_str()}")
+
     if uid in user_file:del user_file[uid]
     if uid in user_insert:del user_insert[uid]
 
@@ -591,6 +600,7 @@ def split_send_clean(cid,uid,txt,name):
     media=[]
     file_idx=1
     batch_num=1
+
     for c in chunk:
         if u['mode']=="VCF":
             vcf=""
@@ -602,6 +612,7 @@ def split_send_clean(cid,uid,txt,name):
         else:
             bio=BytesIO("\n".join(c).encode())
             bio.name=f"{name}_{file_idx}.txt"
+
         media.append(InputMediaDocument(bio))
 
         if len(media)>=10:
@@ -610,6 +621,7 @@ def split_send_clean(cid,uid,txt,name):
             time.sleep(3)
             media=[]
             batch_num+=1
+
         file_idx+=1
 
     if media:
@@ -618,6 +630,7 @@ def split_send_clean(cid,uid,txt,name):
         bot.send_media_group(cid,media)
 
     bot.send_message(cid,f"✅纯净分包全部完成\n当前北京时间：{get_beijing_time_str()}")
+
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
@@ -635,42 +648,30 @@ def doc(m):
             else:txt=data.decode("utf-8","ignore")
             txt=clean_empty_line(txt)
             user_merge[uid].append(txt)
-            bot.send_message(cid,f"已收录第{len(user_merge)}个文件")
+            bot.send_message(m.chat.id,f"已收录第{len(user_merge[uid])}个文件")
             return
-
         if state=="quchong":
             if name.endswith(".zip"):txt=extract_txt_from_zip(data)
             else:txt=data.decode("utf-8","ignore")
             txt=clean_empty_line(txt)
             old=len(txt.splitlines())
-            seen = set()
-            new_lines = []
-            for line in txt.splitlines():
-                if line not in seen:
-                    seen.add(line)
-                    new_lines.append(line)
-            new_txt = "\n".join(new_lines)
-            new=len(new_lines)
+            new=len(list(set(txt.splitlines())))
             fee=new*PRICE_DEDUP
             u=get_user(uid)
             if u['balance']<fee:
                 bot.send_message(m.chat.id,"❌余额不足")
                 return
             u['balance']-=fee
-            add_log(uid,f"号码去重｜原{old}行→去重后{new}行",new,fee)
-            bio=BytesIO(new_txt.encode())
-            bio.name="去重纯净号码.txt"
-            bot.send_document(m.chat.id,bio)
+            add_log(uid,"号码去重",old,fee)
             bot.send_message(m.chat.id,f"去重完成：旧{old}行→新{new}行\n扣费{fee:.4f}")
             user_state[uid]="idle"
             return
-
+        
         if name.endswith(".zip"):txt=extract_txt_from_zip(data)
         else:txt=data.decode("utf-8","ignore")
         txt=clean_empty_line(txt)
         user_file[uid]={"txt":txt}
         bot.send_message(m.chat.id,"✅文件已保存，请选择分包模式",reply_markup=select_menu())
-
     except Exception as e:
         bot.send_message(m.chat.id,f"处理异常：{str(e)}")
 
@@ -678,5 +679,5 @@ while True:
     try:
         bot.polling(none_stop=True)
     except Exception as e:
-        print(e)
+        print("报错：",e)
         time.sleep(3)
