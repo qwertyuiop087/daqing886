@@ -131,7 +131,7 @@ def read_txt_large(data):
         all_lines.extend(lines)
     return all_lines
 
-# TG发送重试
+# TG发送重试【修复：函数不支持reply_markup，去掉参数】
 def safe_send_msg(chat_id, text, retry=3):
     for i in range(retry):
         try:
@@ -625,7 +625,7 @@ def broadcast_photo(msg):
     if not is_admin(msg.from_user.id): return
     global broad_img
     broad_img = msg.photo[-1].file_id
-    safe_send_msg(msg.chat.id,"✅图片已保存，请发送广播文字")
+    safe_send_msg(msg.chat.id,"✅图片已保存，请发送文字内容")
 
 def broadcast_worker(uid_list, img_id, text):
     def send_task(uid):
@@ -652,7 +652,7 @@ def admin_broadcast(msg):
     broad_img = None
     broad_text = ""
 
-# ===================== 【核心修复】分包/去重/合并 共用完全一样的流式解析 =====================
+# ===================== 【最终修复】分包解析完成，用原生bot.send_message带按钮，不用safe_send_msg =====================
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
@@ -698,13 +698,13 @@ def doc(m):
             user_state[uid]="idle"
             return
 
-        # ========== 【修复！分包强制使用和去重完全一致的解析逻辑】 ==========
+        # 分包：解析完成，**原生bot.send_message带按钮菜单，彻底解决参数报错**
         if name.endswith(".zip"):
             lines = extract_txt_from_zip_large(data)
         else:
             lines = read_txt_large(data)
         user_file[uid] = lines
-        safe_send_msg(m.chat.id,f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式",reply_markup=select_menu())
+        bot.send_message(m.chat.id,f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式",reply_markup=select_menu())
 
     except Exception as e:
         safe_send_msg(m.chat.id,f"❌文件处理异常：{str(e)[:80]}，请检查文件格式或重试")
