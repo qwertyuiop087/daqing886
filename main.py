@@ -27,8 +27,7 @@ MAX_WORKERS = 4
 OP_TIMEOUT = 120
 CHUNK_READ_SIZE = 65536
 
-# 全局数据
-broad_img = None
+# 全局数据（只删除图片相关，其余不动）
 broad_text = ""
 task_queue = queue.Queue(maxsize=100)
 user_file = {}
@@ -137,19 +136,6 @@ def safe_send_msg(chat_id, text, retry=3):
         try:
             time.sleep(TG_API_DELAY)
             bot.send_message(chat_id, text)
-            return True
-        except ApiException as e:
-            if "429" in str(e):
-                time.sleep(3)
-                continue
-            return False
-    return False
-
-def safe_send_photo(chat_id, photo_id, caption, retry=3):
-    for i in range(retry):
-        try:
-            time.sleep(TG_API_DELAY)
-            bot.send_photo(chat_id, photo_id, caption=caption)
             return True
         except ApiException as e:
             if "429" in str(e):
@@ -474,7 +460,8 @@ def callback_handler(call):
         bio.name = "有效卡密导出.csv"
         bot.send_document(cid, bio)
     elif data == "broad":
-        safe_send_msg(cid, "📢请发送要广播的图片，再发送文字内容")
+        bot.send_message(cid,"📢请直接输入要广播的文字内容，无需发送图片")
+        bot.register_next_step_handler(call.message, admin_broadcast)
 
     elif data.startswith("rc_page_") or data.startswith("use_page_") or data.startswith("my_rc_") or data.startswith("my_use_"):
         page = int(data.split("_")[-1])
@@ -620,37 +607,25 @@ def admin_cmd(msg):
         except:
             safe_send_msg(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-@bot.message_handler(content_types=['photo'])
-def broadcast_photo(msg):
-    if not is_admin(msg.from_user.id): return
-    global broad_img
-    broad_img = msg.photo[-1].file_id
-    safe_send_msg(msg.chat.id,"✅图片已保存，请发送文字内容")
-
-def broadcast_worker(uid_list, img_id, text):
+# ===================== 【修改后：纯文字广播，无图片】 =====================
+def broadcast_worker(uid_list, text):
     def send_task(uid):
         try:
-            if img_id:
-                safe_send_photo(uid, img_id, text)
-            else:
-                safe_send_msg(uid, text)
+            safe_send_msg(uid, text)
             return 1
         except: return 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         res = executor.map(send_task, uid_list)
     return sum(res)
 
-@bot.message_handler(func=lambda msg: broad_img is not None)
 def admin_broadcast(msg):
-    global broad_img, broad_text
+    global broad_text
     broad_text = msg.text
     user_list = list(users.keys())
     total = len(user_list)
-    safe_send_msg(msg.chat.id,f"📢开始全站广播｜总用户{total}人，后台发送中...")
-    send_count = broadcast_worker(user_list, broad_img, broad_text)
+    safe_send_msg(msg.chat.id,f"📢开始全站文字广播｜总用户{total}人，后台发送中...")
+    send_count = broadcast_worker(user_list, broad_text)
     safe_send_msg(msg.chat.id,f"🎉广播完成｜成功送达{send_count}人｜失败{total-send_count}人｜{get_beijing_time_str()}")
-    broad_img = None
-    broad_text = ""
 
 # ===================== 【最终修复】分包解析完成，用原生bot.send_message带按钮，不用safe_send_msg =====================
 @bot.message_handler(content_types=['document'])
@@ -698,7 +673,7 @@ def doc(m):
             user_state[uid]="idle"
             return
 
-        # 分包：解析完成，**原生bot.send_message带按钮菜单，彻底解决参数报错**
+        # 分包：解析完成，原生bot.send_message带按钮菜单
         if name.endswith(".zip"):
             lines = extract_txt_from_zip_large(data)
         else:
