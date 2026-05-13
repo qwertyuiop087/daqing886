@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from telebot.apihelper import ApiException
 
-# ===================== 全局配置（和你原版完全一致） =====================
+# ===================== 全局配置（原版稳定配置） =====================
 BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
 ADMIN_ID = 6042965834
 PRICE_SPLIT = 0.0004
@@ -27,7 +27,7 @@ MAX_WORKERS = 4
 OP_TIMEOUT = 120
 CHUNK_READ_SIZE = 65536
 
-# 全局数据（全部恢复）
+# 全局数据
 broad_img = None
 broad_text = ""
 task_queue = queue.Queue(maxsize=100)
@@ -43,12 +43,12 @@ page_temp = {}
 lei_detail_log = {}
 temp_split_data = {}
 
-# 姓名库（原样）
+# 姓名库
 XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛"
 MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
 MING2 = "杰豪琳雪婷芳莹瑞阳鑫鹏佳怡涵悦彤诗雅泽安诺"
 
-# ===================== 工具函数（原版超大文件流式读取，20万行稳定） =====================
+# ===================== 工具函数（原版超大文件流式读取，去重/分包共用） =====================
 def get_rand_3_name():
     return random.choice(XING) + random.choice(MING1) + random.choice(MING2)
 
@@ -99,7 +99,7 @@ def dedup_phone_list_large(raw_lines):
             new_lines.append(pure)
     return new_lines, len(raw_lines), len(new_lines)
 
-# 超大ZIP读取（原版稳定逻辑）
+# 超大ZIP读取（原版稳定）
 def extract_txt_from_zip_large(zip_bytes):
     all_lines = []
     try:
@@ -118,7 +118,7 @@ def extract_txt_from_zip_large(zip_bytes):
     except Exception:
         return []
 
-# 超大TXT读取
+# 超大TXT读取（原版稳定）
 def read_txt_large(data):
     all_lines = []
     stream = BytesIO(data)
@@ -131,7 +131,7 @@ def read_txt_large(data):
         all_lines.extend(lines)
     return all_lines
 
-# TG发送重试（原版）
+# TG发送重试
 def safe_send_msg(chat_id, text, retry=3):
     for i in range(retry):
         try:
@@ -171,7 +171,7 @@ def safe_send_media_group(chat_id, media_list, retry=3):
             return False
     return False
 
-# ===================== 分页按钮【完整恢复原版图标+翻页逻辑，充值/消费记录全部回来】 =====================
+# ===================== 分页按钮（完整图标） =====================
 def page_btn(log_type, now_page, total_page):
     kb = telebot.types.InlineKeyboardMarkup(row_width=5)
     btn = []
@@ -190,7 +190,7 @@ def page_btn(log_type, now_page, total_page):
 # ===================== 机器人初始化 =====================
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 
-# ===================== 菜单UI【100%恢复原版所有图标】 =====================
+# ===================== 菜单UI（完整图标） =====================
 def menu(uid):
     u = get_user(uid)
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
@@ -234,7 +234,7 @@ def select_menu():
            telebot.types.InlineKeyboardButton("📄纯净分包",callback_data="noins"))
     return kb
 
-# ===================== 核心业务【恢复原版超大文件逻辑 + 新增行数提示】 =====================
+# ===================== 核心业务 =====================
 def ins_num(m):
     uid=m.from_user.id
     try:
@@ -346,7 +346,7 @@ def ins_done(m):
     if uid in user_file: del user_file[uid]
     if uid in user_insert: del user_insert[uid]
 
-# 纯净分包（原版）
+# 纯净分包
 def split_send_clean(cid,uid,txt_lines,name):
     lines=txt_lines
     total=len(lines)
@@ -403,7 +403,7 @@ def split_send_clean(cid,uid,txt_lines,name):
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
-# ===================== 按钮回调【完整恢复分页逻辑，全站/个人充值消费记录全部回来】 =====================
+# ===================== 按钮回调（完整分页、全站/个人记录） =====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     bot.answer_callback_query(call.id)
@@ -437,7 +437,6 @@ def callback_handler(call):
     elif data == "return_user":
         bot.edit_message_text("👤个人中心", cid, call.message.message_id, reply_markup=user_menu(uid))
 
-    # 管理员完整功能（全部恢复）
     elif data == "admin":
         bot.edit_message_text("🔧管理后台", cid, call.message.message_id, reply_markup=admin_kb())
     elif data == "addbal":
@@ -477,7 +476,6 @@ def callback_handler(call):
     elif data == "broad":
         safe_send_msg(cid, "📢请发送要广播的图片，再发送文字内容")
 
-    # 【核心恢复】分页：个人/全站充值、消费记录全部回来
     elif data.startswith("rc_page_") or data.startswith("use_page_") or data.startswith("my_rc_") or data.startswith("my_use_"):
         page = int(data.split("_")[-1])
         page_temp[uid] = data[:-2]
@@ -516,7 +514,7 @@ def callback_handler(call):
         bot.send_message(cid, "📄请输入文件前缀名")
         bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, temp_split_data[uid], m.text))
 
-# ===================== 管理员函数（原版完整恢复） =====================
+# ===================== 管理员函数 =====================
 def add_single_balance(m):
     try:
         uid, money = m.text.strip().split()
@@ -543,7 +541,7 @@ def sub_single_balance(m):
     except:
         safe_send_msg(m.chat.id, "❌格式错误，请输入：用户ID 金额")
 
-# ===================== 基础消息处理器（原版+新增行数提示） =====================
+# ===================== 基础消息处理器 =====================
 @bot.message_handler(func=lambda msg: msg.text.isdigit())
 def jump_page(msg):
     pass
@@ -568,7 +566,7 @@ def cancel_all(msg):
     if uid in user_file: del user_file[uid]
     safe_send_msg(msg.chat.id, "✅已清空缓存，操作已取消")
 
-# 【合并 恢复20万行 + 新增总行数提示】
+# 合并
 @bot.message_handler(func=lambda m: user_state.get(m.from_user.id)=="hebing" and m.text=="完成")
 def heb(m):
     uid=m.from_user.id
@@ -654,7 +652,7 @@ def admin_broadcast(msg):
     broad_img = None
     broad_text = ""
 
-# 【文件接收 完整恢复20万行超大文件流式读取 + 去重行数提示】
+# ===================== 【核心修复】分包/去重/合并 共用完全一样的流式解析 =====================
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
@@ -663,8 +661,9 @@ def doc(m):
         file = bot.get_file(m.document.file_id)
         data = bot.download_file(file.file_path)
         name = m.document.file_name.lower()
-        safe_send_msg(m.chat.id,"📥正在解析文件，超大文件请耐心等待...")
+        safe_send_msg(m.chat.id,"📥正在解析文件，若是超大文件请耐心等待...")
 
+        # 合并
         if state=="hebing":
             if name.endswith(".zip"):
                 lines = extract_txt_from_zip_large(data)
@@ -674,6 +673,7 @@ def doc(m):
             safe_send_msg(m.chat.id,f"✅已收录第{len(user_merge[uid])}个文件，行数：{len(lines)}，继续上传或发送【完成】")
             return
 
+        # 去重（稳定原版逻辑）
         if state=="quchong":
             if name.endswith(".zip"):
                 raw_lines = extract_txt_from_zip_large(data)
@@ -698,17 +698,18 @@ def doc(m):
             user_state[uid]="idle"
             return
 
-        # 正常分包
+        # ========== 【修复！分包强制使用和去重完全一致的解析逻辑】 ==========
         if name.endswith(".zip"):
             lines = extract_txt_from_zip_large(data)
         else:
             lines = read_txt_large(data)
         user_file[uid] = lines
         safe_send_msg(m.chat.id,f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式",reply_markup=select_menu())
+
     except Exception as e:
         safe_send_msg(m.chat.id,f"❌文件处理异常：{str(e)[:80]}，请检查文件格式或重试")
 
-# 卡密函数（原版完整）
+# 卡密函数
 def del_single_cdk(msg):
     cdk=msg.text.strip()
     if cdk in cards:
