@@ -431,7 +431,7 @@ def s(m):
     user_state[uid]="idle"
     lei_detail_log.pop(uid, None)
     now = get_beijing_time_str()
-    safe_send_msg(m.chat.id,f"🤖大晴机器人｜已就绪✅\n⏰北京时间：{now})
+    safe_send_msg(m.chat.id,f"🤖大晴机器人｜已就绪✅\n⏰北京时间：{now}")
     bot.send_message(m.chat.id,"🏠主菜单",reply_markup=menu(uid))
 
 @bot.message_handler(func=lambda msg: msg.text.strip() == "取消")
