@@ -47,7 +47,7 @@ XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张
 MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
 MING2 = "杰豪琳雪婷芳莹瑞阳鑫鹏佳怡涵悦彤诗雅泽安诺"
 
-# ===================== 工具函数（原版超大文件流式读取，去重/分包共用） =====================
+# ===================== 工具函数（简化：只清空白行，纯整行读取） =====================
 def get_rand_3_name():
     return random.choice(XING) + random.choice(MING1) + random.choice(MING2)
 
@@ -77,60 +77,47 @@ def get_beijing_time_str():
 def get_now_timestamp():
     return int(time.time())
 
-# 流式清洗
-def clean_empty_line_large(text):
-    lines = text.splitlines()
-    res = []
-    for line in lines:
-        s = line.strip()
+# 【极简清洗：只保留纯手机号，清除空白行、空格、换行】
+def clean_lines(raw_lines):
+    clean = []
+    for line in raw_lines:
+        s = re.sub(r'\s+', '', line.strip())
         if s:
-            res.append(s)
-    return "\n".join(res), res
+            clean.append(s)
+    return clean
+
+# 超大ZIP读取
+def extract_txt_from_zip_large(zip_bytes):
+    all_raw = []
+    try:
+        with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+            for file_name in zf.namelist():
+                if file_name.lower().endswith(".txt") and not file_name.endswith("/"):
+                    with zf.open(file_name) as f:
+                        text = f.read().decode("utf-8", errors="ignore")
+                        all_raw.extend(text.splitlines())
+        return clean_lines(all_raw)
+    except Exception:
+        return []
+
+# 超大TXT读取
+def read_txt_large(data):
+    text = data.decode("utf-8", errors="ignore")
+    raw_lines = text.splitlines()
+    return clean_lines(raw_lines)
 
 # 流式去重
 def dedup_phone_list_large(raw_lines):
     seen = set()
     new_lines = []
     for line in raw_lines:
-        pure = line.strip()
+        pure = re.sub(r'\s+', '', line.strip())
         if pure and pure not in seen:
             seen.add(pure)
             new_lines.append(pure)
     return new_lines, len(raw_lines), len(new_lines)
 
-# 超大ZIP读取（原版稳定）
-def extract_txt_from_zip_large(zip_bytes):
-    all_lines = []
-    try:
-        with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
-            for file_name in zf.namelist():
-                if file_name.lower().endswith(".txt") and not file_name.endswith("/"):
-                    with zf.open(file_name) as f:
-                        while True:
-                            chunk = f.read(CHUNK_READ_SIZE)
-                            if not chunk:
-                                break
-                            txt = chunk.decode("utf-8", errors="ignore")
-                            _, lines = clean_empty_line_large(txt)
-                            all_lines.extend(lines)
-        return all_lines
-    except Exception:
-        return []
-
-# 超大TXT读取（原版稳定）
-def read_txt_large(data):
-    all_lines = []
-    stream = BytesIO(data)
-    while True:
-        chunk = stream.read(CHUNK_READ_SIZE)
-        if not chunk:
-            break
-        txt = chunk.decode("utf-8", errors="ignore")
-        _, lines = clean_empty_line_large(txt)
-        all_lines.extend(lines)
-    return all_lines
-
-# TG发送重试【修复：函数不支持reply_markup，去掉参数】
+# TG发送重试
 def safe_send_msg(chat_id, text, retry=3):
     for i in range(retry):
         try:
@@ -220,7 +207,7 @@ def select_menu():
            telebot.types.InlineKeyboardButton("📄纯净分包",callback_data="noins"))
     return kb
 
-# ===================== 核心业务 =====================
+# ===================== 核心业务【纯按行数硬切，不拆手机号 + 清空白行】 =====================
 def ins_num(m):
     uid=m.from_user.id
     try:
@@ -263,6 +250,7 @@ def ins_done(m):
 
     safe_send_msg(cid,f"✅余额校验通过，文件行数：{total}行，正在后台处理+生成插雷明细，请耐心等待...")
 
+    # 纯按行数硬切，整行分割，绝不拆手机号
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media = []
     file_idx = 1
@@ -332,7 +320,7 @@ def ins_done(m):
     if uid in user_file: del user_file[uid]
     if uid in user_insert: del user_insert[uid]
 
-# 纯净分包
+# 纯净分包【纯按行数硬切 + 清除空白行，100%不拆分手机号】
 def split_send_clean(cid,uid,txt_lines,name):
     lines=txt_lines
     total=len(lines)
@@ -343,6 +331,7 @@ def split_send_clean(cid,uid,txt_lines,name):
         return
 
     safe_send_msg(cid,f"✅余额校验通过，文件行数：{total}行，正在生成文件，请耐心等待...")
+    # 纯按行数硬切，整行分割，绝不拆手机号
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media=[]
     file_idx=1
@@ -607,7 +596,7 @@ def admin_cmd(msg):
         except:
             safe_send_msg(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-# ===================== 【修改后：纯文字广播，无图片】 =====================
+# ===================== 纯文字广播 =====================
 def broadcast_worker(uid_list, text):
     def send_task(uid):
         try:
@@ -627,7 +616,7 @@ def admin_broadcast(msg):
     send_count = broadcast_worker(user_list, broad_text)
     safe_send_msg(msg.chat.id,f"🎉广播完成｜成功送达{send_count}人｜失败{total-send_count}人｜{get_beijing_time_str()}")
 
-# ===================== 【最终修复】分包解析完成，用原生bot.send_message带按钮，不用safe_send_msg =====================
+# ===================== 文件接收（分包纯按行数切割，清空白行） =====================
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
@@ -648,7 +637,7 @@ def doc(m):
             safe_send_msg(m.chat.id,f"✅已收录第{len(user_merge[uid])}个文件，行数：{len(lines)}，继续上传或发送【完成】")
             return
 
-        # 去重（稳定原版逻辑）
+        # 去重
         if state=="quchong":
             if name.endswith(".zip"):
                 raw_lines = extract_txt_from_zip_large(data)
@@ -673,7 +662,7 @@ def doc(m):
             user_state[uid]="idle"
             return
 
-        # 分包：解析完成，原生bot.send_message带按钮菜单
+        # 分包（纯整行读取，清空白行）
         if name.endswith(".zip"):
             lines = extract_txt_from_zip_large(data)
         else:
