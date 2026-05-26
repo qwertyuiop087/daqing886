@@ -12,9 +12,11 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from telebot.apihelper import ApiException
 
-# ===================== 全局配置（原版稳定配置） =====================
-BOT_TOKEN = "8511432045:AAGhJ5wg9JuK-rufe_Vn67bSyqDBDRLXfDQ"
-ADMIN_ID = 6042965834
+# ===================== 从 Railway 环境变量读取配置（无硬编码密钥） =====================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# 业务费率&运行配置（可按需自行修改）
 PRICE_SPLIT = 0.0004
 PRICE_INSERT = 0.0004
 PRICE_MERGE = 0.0002
@@ -27,7 +29,7 @@ MAX_WORKERS = 4
 OP_TIMEOUT = 120
 CHUNK_READ_SIZE = 65536
 
-# 全局数据（只删除图片相关，其余不动）
+# 全局数据
 broad_text = ""
 task_queue = queue.Queue(maxsize=100)
 user_file = {}
@@ -47,7 +49,7 @@ XING = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张
 MING1 = "伟俊佳浩宇泽晨欣雨轩博文铭凯艺霖梓睿一诺嘉航沐辰"
 MING2 = "杰豪琳雪婷芳莹瑞阳鑫鹏佳怡涵悦彤诗雅泽安诺"
 
-# ===================== 工具函数（简化：只清空白行，纯整行读取） =====================
+# ===================== 工具函数 =====================
 def get_rand_3_name():
     return random.choice(XING) + random.choice(MING1) + random.choice(MING2)
 
@@ -77,7 +79,7 @@ def get_beijing_time_str():
 def get_now_timestamp():
     return int(time.time())
 
-# 【极简清洗：只保留纯手机号，清除空白行、空格、换行】
+# 清洗空白行、多余空格
 def clean_lines(raw_lines):
     clean = []
     for line in raw_lines:
@@ -86,7 +88,7 @@ def clean_lines(raw_lines):
             clean.append(s)
     return clean
 
-# 超大ZIP读取
+# 解析ZIP内TXT
 def extract_txt_from_zip_large(zip_bytes):
     all_raw = []
     try:
@@ -100,13 +102,13 @@ def extract_txt_from_zip_large(zip_bytes):
     except Exception:
         return []
 
-# 超大TXT读取
+# 解析纯TXT
 def read_txt_large(data):
     text = data.decode("utf-8", errors="ignore")
     raw_lines = text.splitlines()
     return clean_lines(raw_lines)
 
-# 流式去重
+# 号码去重
 def dedup_phone_list_large(raw_lines):
     seen = set()
     new_lines = []
@@ -117,7 +119,7 @@ def dedup_phone_list_large(raw_lines):
             new_lines.append(pure)
     return new_lines, len(raw_lines), len(new_lines)
 
-# TG发送重试
+# TG消息发送（带重试）
 def safe_send_msg(chat_id, text, retry=3):
     for i in range(retry):
         try:
@@ -144,7 +146,7 @@ def safe_send_media_group(chat_id, media_list, retry=3):
             return False
     return False
 
-# ===================== 分页按钮（完整图标） =====================
+# 分页按钮
 def page_btn(log_type, now_page, total_page):
     kb = telebot.types.InlineKeyboardMarkup(row_width=5)
     btn = []
@@ -161,9 +163,13 @@ def page_btn(log_type, now_page, total_page):
     return kb
 
 # ===================== 机器人初始化 =====================
+if not BOT_TOKEN or ADMIN_ID == 0:
+    print("错误：请在环境变量配置 BOT_TOKEN 和 ADMIN_ID")
+    exit()
+
 bot = telebot.TeleBot(BOT_TOKEN, skip_pending=True)
 
-# ===================== 菜单UI（完整图标） =====================
+# ===================== 菜单UI =====================
 def menu(uid):
     u = get_user(uid)
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
@@ -207,7 +213,7 @@ def select_menu():
            telebot.types.InlineKeyboardButton("📄纯净分包",callback_data="noins"))
     return kb
 
-# ===================== 核心业务【纯按行数硬切，不拆手机号 + 清空白行】 =====================
+# ===================== 插雷分包逻辑 =====================
 def ins_num(m):
     uid=m.from_user.id
     try:
@@ -249,8 +255,6 @@ def ins_done(m):
         return
 
     safe_send_msg(cid,f"✅余额校验通过，文件行数：{total}行，正在后台处理+生成插雷明细，请耐心等待...")
-
-    # 纯按行数硬切，整行分割，绝不拆手机号
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media = []
     file_idx = 1
@@ -320,7 +324,7 @@ def ins_done(m):
     if uid in user_file: del user_file[uid]
     if uid in user_insert: del user_insert[uid]
 
-# 纯净分包【纯按行数硬切 + 清除空白行，100%不拆分手机号】
+# 纯净分包
 def split_send_clean(cid,uid,txt_lines,name):
     lines=txt_lines
     total=len(lines)
@@ -331,7 +335,6 @@ def split_send_clean(cid,uid,txt_lines,name):
         return
 
     safe_send_msg(cid,f"✅余额校验通过，文件行数：{total}行，正在生成文件，请耐心等待...")
-    # 纯按行数硬切，整行分割，绝不拆手机号
     chunk = [lines[i:i+u['line']] for i in range(0,total,u['line'])]
     media=[]
     file_idx=1
@@ -378,7 +381,7 @@ def split_send_clean(cid,uid,txt_lines,name):
     if uid in temp_split_data:del temp_split_data[uid]
     if uid in user_file:del user_file[uid]
 
-# ===================== 按钮回调（完整分页、全站/个人记录） =====================
+# ===================== 按钮回调 =====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     bot.answer_callback_query(call.id)
@@ -490,7 +493,7 @@ def callback_handler(call):
         bot.send_message(cid, "📄请输入文件前缀名")
         bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, temp_split_data[uid], m.text))
 
-# ===================== 管理员函数 =====================
+# ===================== 管理员功能 =====================
 def add_single_balance(m):
     try:
         uid, money = m.text.strip().split()
@@ -542,7 +545,7 @@ def cancel_all(msg):
     if uid in user_file: del user_file[uid]
     safe_send_msg(msg.chat.id, "✅已清空缓存，操作已取消")
 
-# 合并
+# 文件合并
 @bot.message_handler(func=lambda m: user_state.get(m.from_user.id)=="hebing" and m.text=="完成")
 def heb(m):
     uid=m.from_user.id
@@ -596,7 +599,7 @@ def admin_cmd(msg):
         except:
             safe_send_msg(msg.chat.id,"❌格式：查询用户消费记录 用户ID")
 
-# ===================== 纯文字广播 =====================
+# 全站广播
 def broadcast_worker(uid_list, text):
     def send_task(uid):
         try:
@@ -616,7 +619,7 @@ def admin_broadcast(msg):
     send_count = broadcast_worker(user_list, broad_text)
     safe_send_msg(msg.chat.id,f"🎉广播完成｜成功送达{send_count}人｜失败{total-send_count}人｜{get_beijing_time_str()}")
 
-# ===================== 文件接收（分包纯按行数切割，清空白行） =====================
+# 接收文件
 @bot.message_handler(content_types=['document'])
 def doc(m):
     uid=m.from_user.id
@@ -627,7 +630,6 @@ def doc(m):
         name = m.document.file_name.lower()
         safe_send_msg(m.chat.id,"📥正在解析文件，若是超大文件请耐心等待...")
 
-        # 合并
         if state=="hebing":
             if name.endswith(".zip"):
                 lines = extract_txt_from_zip_large(data)
@@ -637,7 +639,6 @@ def doc(m):
             safe_send_msg(m.chat.id,f"✅已收录第{len(user_merge[uid])}个文件，行数：{len(lines)}，继续上传或发送【完成】")
             return
 
-        # 去重
         if state=="quchong":
             if name.endswith(".zip"):
                 raw_lines = extract_txt_from_zip_large(data)
@@ -662,7 +663,6 @@ def doc(m):
             user_state[uid]="idle"
             return
 
-        # 分包（纯整行读取，清空白行）
         if name.endswith(".zip"):
             lines = extract_txt_from_zip_large(data)
         else:
@@ -673,7 +673,7 @@ def doc(m):
     except Exception as e:
         safe_send_msg(m.chat.id,f"❌文件处理异常：{str(e)[:80]}，请检查文件格式或重试")
 
-# 卡密函数
+# 卡密相关
 def del_single_cdk(msg):
     cdk=msg.text.strip()
     if cdk in cards:
@@ -744,9 +744,11 @@ def set_line(m):
         safe_send_msg(m.chat.id,"❌请输入纯数字")
 
 # 常驻运行
-while True:
-    try:
-        bot.polling(none_stop=True, timeout=60)
-    except Exception as e:
-        print(f"运行异常: {e}")
-        time.sleep(3)
+if __name__ == "__main__":
+    print("🤖 机器人启动成功...")
+    while True:
+        try:
+            bot.polling(none_stop=True, timeout=60)
+        except Exception as e:
+            print(f"运行异常: {e}")
+            time.sleep(3)
