@@ -25,6 +25,8 @@ BATCH_SIZE = 10
 PAGE_NUM = 20
 TG_API_DELAY = 1.2
 TG_GROUP_DELAY = 2.5
+BROAD_DELAY = 0.15      # 广播单条间隔，防风控
+BROAD_BATCH = 50        # 每50条播报一次进度
 MAX_WORKERS = 4
 OP_TIMEOUT = 120
 CHUNK_READ_SIZE = 65536
@@ -159,6 +161,8 @@ def safe_send_msg(chat_id, text, retry=3):
                 time.sleep(3)
                 continue
             return False
+        except Exception:
+            continue
     return False
 
 def safe_send_media_group(chat_id, media_list, retry=3):
@@ -172,6 +176,8 @@ def safe_send_media_group(chat_id, media_list, retry=3):
                 time.sleep(4)
                 continue
             return False
+        except Exception:
+            continue
     return False
 
 # 分页按钮组件
@@ -431,7 +437,7 @@ def split_send_clean(cid, uid, txt_lines, name):
     if uid in user_file:
         del user_file[uid]
 
-# ===================== 管理员功能：清空余额、扣除VIP天数、广播 =====================
+# ===================== 管理员功能：清空余额、扣除VIP天数、【修复版带进度广播】 =====================
 def wait_clear_balance_user(m):
     try:
         target_uid = int(m.text.strip())
@@ -460,6 +466,50 @@ def wait_deduct_vip_days(m):
     except (ValueError, IndexError):
         safe_send_msg(m.chat.id, "❌格式错误！示例：123456 3")
 
+# 【重点修复】广播函数 + 实时进度 + 后台线程执行（不卡死机器人）
+def broadcast_task(admin_cid, content):
+    user_list = list(users.keys())
+    total = len(user_list)
+    success = 0
+    fail = 0
+    progress_msg = None
+
+    # 初始提示
+    try:
+        progress_msg = bot.send_message(admin_cid, f"📢 开始全站广播\n总用户数：{total}\n正在发送...")
+    except:
+        return
+
+    for idx, user_id in enumerate(user_list, 1):
+        try:
+            time.sleep(BROAD_DELAY)
+            bot.send_message(user_id, f"📢【全站公告】\n{content}")
+            success += 1
+        except Exception:
+            fail += 1
+
+        # 每 BROAD_BATCH 条更新一次进度
+        if idx % BROAD_BATCH == 0:
+            percent = round(idx / total * 100, 1)
+            try:
+                bot.edit_message_text(
+                    f"📢 广播进行中\n进度：{idx}/{total}（{percent}%）\n成功：{success} | 失败：{fail}",
+                    admin_cid,
+                    progress_msg.message_id
+                )
+            except:
+                pass
+
+    # 最终结果
+    try:
+        bot.edit_message_text(
+            f"✅ 全站广播已完成\n总用户：{total}\n发送成功：{success}\n发送失败：{fail}",
+            admin_cid,
+            progress_msg.message_id
+        )
+    except:
+        safe_send_msg(admin_cid, f"✅ 全站广播已完成\n总用户：{total}\n发送成功：{success}\n发送失败：{fail}")
+
 def do_broadcast(m):
     uid = m.from_user.id
     cid = m.chat.id
@@ -469,19 +519,11 @@ def do_broadcast(m):
     if not content:
         safe_send_msg(cid, "❌广播内容不能为空")
         return
-    user_list = list(users.keys())
-    total_user = len(user_list)
-    safe_send_msg(cid, f"⏳开始全站广播，共 {total_user} 位用户，请稍等...")
-    success = 0
-    fail = 0
-    for user_id in user_list:
-        try:
-            time.sleep(0.08)
-            bot.send_message(user_id, f"📢【全站公告】\n{content}")
-            success += 1
-        except:
-            fail += 1
-    safe_send_msg(cid, f"✅广播结束\n发送成功：{success}\n发送失败：{fail}")
+    if len(users) == 0:
+        safe_send_msg(cid, "❌暂无任何使用过机器人的用户，无需广播")
+        return
+    # 后台线程运行广播，不阻塞主程序
+    threading.Thread(target=broadcast_task, args=(cid, content), daemon=True).start()
 
 # ===================== 卡密、充值、扣费函数 =====================
 def create_balance_card(m):
@@ -629,7 +671,7 @@ def callback_handler(call):
             return
         bot.edit_message_text("🔧管理后台", cid, call.message.message_id, reply_markup=admin_kb())
 
-    # 全站广播
+    # 全站广播入口
     elif data == "broad":
         if not is_admin(uid):
             return
