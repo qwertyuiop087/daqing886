@@ -145,7 +145,7 @@ def dedup_phone_list_large(raw_lines):
         if pure and pure not in seen:
             seen.add(pure)
             new_lines.append(pure)
-    return new_lines, len(raw_lines), len(raw_lines)
+    return new_lines, len(raw_lines), len(new_lines)
 
 # 消息发送
 def safe_send_msg(chat_id, text, retry=3):
@@ -219,7 +219,7 @@ def user_menu(uid):
     kb.add(telebot.types.InlineKeyboardButton("🔙返回主页",callback_data="back"))
     return kb
 
-# 管理员菜单：新增【⏰扣除VIP天数】
+# 管理员菜单：含扣除VIP天数、全站广播
 def admin_kb():
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
     kb.add(telebot.types.InlineKeyboardButton("➕单人加余额",callback_data="addbal"),
@@ -246,29 +246,30 @@ def select_menu():
            telebot.types.InlineKeyboardButton("📄纯净分包",callback_data="noins"))
     return kb
 
-# ===================== 业务功能逻辑（分包/插雷/合并/去重） =====================
+# ===================== 业务功能逻辑 =====================
 def ins_num(m):
     uid = m.from_user.id
     try:
         num = int(m.text)
         user_insert[uid] = {"num": num, "txt_lines": user_file[uid]}
         lei_detail_log[uid] = []
-        bot.send_message(m.chat.id, "⚡请发送雷号，一行一个")
+        safe_send_msg(m.chat.id, "⚡请发送雷号，一行一个")
         bot.register_next_step_handler(m, ins_phone)
     except:
-        bot.send_message(m.chat.id, "❌请输入纯数字")
+        safe_send_msg(m.chat.id, "❌请输入纯数字")
 
 def ins_phone(m):
     uid = m.from_user.id
     if uid not in user_insert:
-        return bot.send_message(m.chat.id, "❌流程失效，请重新上传文件")
+        safe_send_msg(m.chat.id, "❌流程失效，请重新上传文件")
+        return
     phones = re.findall(r"\d+", m.text)
     if len(phones) == 0:
-        bot.send_message(m.chat.id, "❌未识别号码，请重发")
+        safe_send_msg(m.chat.id, "❌未识别号码，请重发")
         bot.register_next_step_handler(m, ins_phone)
         return
     user_insert[uid]['phone'] = phones
-    bot.send_message(m.chat.id, "📄请输入文件前缀名（例如：插雷成品）")
+    safe_send_msg(m.chat.id, "📄请输入文件前缀名（例如：插雷成品）")
     bot.register_next_step_handler(m, ins_done)
 
 def ins_done(m):
@@ -283,7 +284,6 @@ def ins_done(m):
     total_fee = fee_split + fee_insert
     u = get_user(uid)
 
-    # 余额校验提示，和你截图一致
     if not is_vip_valid(uid):
         if u['balance'] < total_fee:
             safe_send_msg(cid, f"❌余额不足｜需要{total_fee:.4f}元｜当前{u['balance']:.4f}元")
@@ -317,8 +317,8 @@ def ins_done(m):
         if u['mode'] == "VCF":
             vcf = ""
             for p in temp_list:
-                n = get_rand_3_name()
-                vcf += f"BEGIN:VCARD\nVERSION:3.0\nN:{n};;;\nFN:{n}\nTEL:{p}\nEND:VCARD\n"
+                name = get_rand_3_name()
+                vcf += f"BEGIN:VCARD\nVERSION:3.0\nN:{name};;;\nTEL:{p}\nEND:VCARD\n"
             bio = BytesIO(vcf.encode())
             bio.name = f"{file_prefix}_{file_idx}.vcf"
         else:
@@ -346,7 +346,7 @@ def ins_done(m):
     if send_all_success:
         if not is_vip_valid(uid):
             u['balance'] -= total_fee
-            add_log(uid, f"插雷分包｜每份{info['num']}个雷｜雷号池{len(info['phone'])}个｜总行数{total}", total, total_fee)
+            add_log(uid, f"插雷分包｜每份{info['num']}个雷｜雷号池{len(phones)}个｜总行数{total}", total, total_fee)
         lei_detail_log[uid] = detail_lines
         detail_txt = "📝插雷位置明细（可核对每一个雷号位置）\n" + "\n".join(detail_lines)
         if len(detail_txt) > 3800:
@@ -360,7 +360,7 @@ def ins_done(m):
         else:
             safe_send_msg(cid, f"✅插雷分包全部完成｜扣费{total_fee:.4f}元｜剩余{u['balance']:.4f}元｜共{file_idx-1}个文件")
     else:
-        safe_send_msg(cid, "❌文件发送失败（重试3次后仍失败），本次操作**不扣费**，请稍后重试！")
+        safe_send_msg(cid, "❌文件发送失败（重试3次后仍失败），本次操作不扣费，请稍后重试！")
 
     if uid in user_file:
         del user_file[uid]
@@ -373,7 +373,6 @@ def split_send_clean(cid, uid, txt_lines, name):
     fee = total * PRICE_SPLIT
     u = get_user(uid)
 
-    # 余额校验提示，和你截图一致
     if not is_vip_valid(uid):
         if u['balance'] < fee:
             safe_send_msg(cid, "❌余额不足")
@@ -393,7 +392,7 @@ def split_send_clean(cid, uid, txt_lines, name):
             vcf = ""
             for p in c:
                 n = get_rand_3_name()
-                vcf += f"BEGIN:VCARD\nVERSION:3.0\nN:{n};;;\nFN:{n}\nTEL:{p}\nEND:VCARD\n"
+                vcf += f"BEGIN:VCARD\nVERSION:3.0\nN:{n};;;\nTEL:{p}\nEND:VCARD\n"
             bio = BytesIO(vcf.encode())
             bio.name = f"{name}_{file_idx}.vcf"
         else:
@@ -427,12 +426,12 @@ def split_send_clean(cid, uid, txt_lines, name):
         else:
             safe_send_msg(cid, f"✅纯净分包完成｜扣费{fee:.4f}元｜剩余{u['balance']:.4f}元")
     else:
-        safe_send_msg(cid, "❌发送失败，本次**不扣费**，请重试！")
+        safe_send_msg(cid, "❌发送失败，本次不扣费，请重试！")
 
     if uid in user_file:
         del user_file[uid]
 
-# ===================== 新增：清空指定用户余额 & 扣除VIP天数 流程 =====================
+# ===================== 管理员功能：清空余额、扣除VIP天数、广播 =====================
 def wait_clear_balance_user(m):
     try:
         target_uid = int(m.text.strip())
@@ -452,16 +451,131 @@ def wait_deduct_vip_days(m):
         now = get_now_timestamp()
         old_days = get_vip_days_remaining(target_uid)
         if u["vip_expire"] <= now:
-            safe_send_msg(m.chat.id, f"❌用户{target_uid}当前无有效VIP时长，无法扣除")
+            safe_send_msg(m.chat.id, f"❌用户{target_uid}暂无有效VIP，无法扣除")
             return
         new_expire = max(now, u["vip_expire"] - days * 86400)
         u["vip_expire"] = new_expire
         new_days = get_vip_days_remaining(target_uid)
         safe_send_msg(m.chat.id, f"✅操作成功\n用户ID：{target_uid}\n扣除天数：{days}天\n原剩余：{old_days}天\n新剩余：{new_days}天\n到期时间：{get_vip_expire_time_str(target_uid)}")
     except (ValueError, IndexError):
-        safe_send_msg(m.chat.id, "❌格式错误！请按：用户ID 扣除天数 发送（例：123456 3）")
+        safe_send_msg(m.chat.id, "❌格式错误！示例：123456 3")
 
-# ===================== 回调事件（核心入口） =====================
+def do_broadcast(m):
+    uid = m.from_user.id
+    cid = m.chat.id
+    if not is_admin(uid):
+        return
+    content = m.text.strip()
+    if not content:
+        safe_send_msg(cid, "❌广播内容不能为空")
+        return
+    user_list = list(users.keys())
+    total_user = len(user_list)
+    safe_send_msg(cid, f"⏳开始全站广播，共 {total_user} 位用户，请稍等...")
+    success = 0
+    fail = 0
+    for user_id in user_list:
+        try:
+            time.sleep(0.08)
+            bot.send_message(user_id, f"📢【全站公告】\n{content}")
+            success += 1
+        except:
+            fail += 1
+    safe_send_msg(cid, f"✅广播结束\n发送成功：{success}\n发送失败：{fail}")
+
+# ===================== 卡密、充值、扣费函数 =====================
+def create_balance_card(m):
+    try:
+        parts = m.text.strip().split()
+        cdk = parts[0]
+        val = float(parts[1])
+        cards[cdk] = val
+        safe_send_msg(m.chat.id, f"✅余额卡密创建成功\n卡密：{cdk}\n面额：{val}")
+    except:
+        safe_send_msg(m.chat.id, "❌格式错误！示例：ABC123 10")
+
+def create_time_card(m):
+    try:
+        parts = m.text.strip().split()
+        cdk = parts[0]
+        days = int(parts[1])
+        time_cards[cdk] = days
+        safe_send_msg(m.chat.id, f"✅时长卡密创建成功\n卡密：{cdk}\n有效天数：{days}天")
+    except:
+        safe_send_msg(m.chat.id, "❌格式错误！示例：XYZ789 7")
+
+def use_cdk(m):
+    uid = m.from_user.id
+    cdk = m.text.strip()
+    cid = m.chat.id
+    if cdk in cards:
+        val = cards.pop(cdk)
+        get_user(uid)["balance"] += val
+        add_rc(uid, val)
+        safe_send_msg(cid, f"✅余额卡密兑换成功\n到账金额：{val}")
+    elif cdk in time_cards:
+        days = time_cards.pop(cdk)
+        now = get_now_timestamp()
+        expire = now + days * 86400
+        get_user(uid)["vip_expire"] = expire
+        safe_send_msg(cid, f"✅时长VIP兑换成功\n有效时长：{days}天\n到期时间：{get_vip_expire_time_str(uid)}")
+    else:
+        safe_send_msg(cid, "❌卡密无效或已使用")
+
+def del_cdk(m):
+    cdk = m.text.strip()
+    if cdk in cards:
+        del cards[cdk]
+        safe_send_msg(m.chat.id, "✅余额卡密已作废")
+    elif cdk in time_cards:
+        del time_cards[cdk]
+        safe_send_msg(m.chat.id, "✅时长卡密已作废")
+    else:
+        safe_send_msg(m.chat.id, "❌未找到该卡密")
+
+def add_single_balance(m):
+    try:
+        uid, money = m.text.strip().split()
+        uid = int(uid)
+        money = float(money)
+        get_user(uid)["balance"] += money
+        add_rc(uid, money)
+        safe_send_msg(m.chat.id, f"✅成功给用户{uid}充值 {money}")
+    except:
+        safe_send_msg(m.chat.id, "❌格式错误，请按：用户ID 金额 发送")
+
+def sub_single_balance(m):
+    try:
+        uid, money = m.text.strip().split()
+        uid = int(uid)
+        money = float(money)
+        u = get_user(uid)
+        if u["balance"] >= money:
+            u["balance"] -= money
+            add_log(uid, "管理员扣余额", 0, money)
+            safe_send_msg(m.chat.id, f"✅成功扣除用户{uid}余额 {money}")
+        else:
+            safe_send_msg(m.chat.id, "❌用户余额不足")
+    except:
+        safe_send_msg(m.chat.id, "❌格式错误，请按：用户ID 金额 发送")
+
+def batch_add_user_balance(m):
+    lines = m.text.strip().splitlines()
+    succ = 0
+    fail = 0
+    for line in lines:
+        try:
+            uid, money = line.strip().split()
+            uid = int(uid)
+            money = float(money)
+            get_user(uid)["balance"] += money
+            add_rc(uid, money)
+            succ += 1
+        except:
+            fail += 1
+    safe_send_msg(m.chat.id, f"🔥批量充值完成\n成功：{succ} 条\n失败：{fail} 条")
+
+# ===================== 回调事件 =====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = call.from_user.id
@@ -476,7 +590,13 @@ def callback_handler(call):
 
     elif data == "line":
         bot.send_message(cid, "📏请输入单文件分割行数（纯数字）")
-        bot.register_next_step_handler(call.message, lambda m: (get_user(uid).__setitem__("line", int(m.text)) if m.text.isdigit() else safe_send_msg(cid, "❌请输入数字"), bot.send_message(cid, "✅行数设置完成", reply_markup=menu(uid))))
+        def set_line(m):
+            if m.text.isdigit():
+                get_user(uid)["line"] = int(m.text)
+                bot.send_message(cid, "✅行数设置完成", reply_markup=menu(uid))
+            else:
+                safe_send_msg(cid, "❌请输入数字")
+        bot.register_next_step_handler(call.message, set_line)
 
     elif data == "user":
         bot.edit_message_text("👤个人中心", cid, call.message.message_id, reply_markup=user_menu(uid))
@@ -485,8 +605,8 @@ def callback_handler(call):
         u = get_user(uid)
         vip_status = "✅生效中" if is_vip_valid(uid) else "❌已过期/未开通"
         expire_time = get_vip_expire_time_str(uid)
-        remaining_days = get_vip_days_remaining(uid)
-        bot.send_message(cid, f"💰当前余额：{u['balance']:.4f}\n⏰VIP状态：{vip_status}\n📅到期时间：{expire_time}\n剩余时长：{remaining_days}天")
+        remain_days = get_vip_days_remaining(uid)
+        safe_send_msg(cid, f"💰当前余额：{u['balance']:.4f}\n⏰VIP状态：{vip_status}\n📅到期时间：{expire_time}\n剩余时长：{remain_days}天")
 
     elif data == "back":
         bot.edit_message_text("🏠返回主页", cid, call.message.message_id, reply_markup=menu(uid))
@@ -509,14 +629,21 @@ def callback_handler(call):
             return
         bot.edit_message_text("🔧管理后台", cid, call.message.message_id, reply_markup=admin_kb())
 
-    # ========== 新增：清空用户余额 ==========
+    # 全站广播
+    elif data == "broad":
+        if not is_admin(uid):
+            return
+        safe_send_msg(cid, "📢请输入要全站广播的内容（文字/表情）：")
+        bot.register_next_step_handler(call.message, do_broadcast)
+
+    # 清空用户余额
     elif data == "clear_bal":
         safe_send_msg(cid, "🗑️请输入要清空余额的【用户纯数字ID】：")
         bot.register_next_step_handler(call.message, wait_clear_balance_user)
 
-    # ========== 新增：扣除VIP天数 ==========
+    # 扣除VIP天数
     elif data == "deduct_vip_days":
-        safe_send_msg(cid, "⏰请输入要扣除VIP天数的用户ID和天数，格式：用户ID 天数（例：123456 3）")
+        safe_send_msg(cid, "⏰格式：用户ID 天数（例：123456 3）")
         bot.register_next_step_handler(call.message, wait_deduct_vip_days)
 
     elif data == "addbal":
@@ -532,11 +659,11 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, batch_add_user_balance)
 
     elif data == "card":
-        safe_send_msg(cid, "🎟️请输入卡密内容、面额（例：ABC123 10）")
+        safe_send_msg(cid, "🎟️格式：卡密 面额（例：ABC123 10）")
         bot.register_next_step_handler(call.message, create_balance_card)
 
     elif data == "time_card":
-        safe_send_msg(cid, "⏰创建时长卡密：格式 卡密 天数（例：XYZ789 7）")
+        safe_send_msg(cid, "⏰格式：卡密 天数（例：XYZ789 7）")
         bot.register_next_step_handler(call.message, create_time_card)
 
     elif data == "check_all_cdk":
@@ -556,7 +683,7 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, del_cdk)
 
     elif data == "export_cdk":
-        txt = "余额卡密：\n" + "\n".join(cards.keys()) + "\n时长卡密：\n" + "\n".join(time_cards.keys())
+        txt = "余额卡密：\n" + "\n".join(cards.keys()) + "\n\n时长卡密：\n" + "\n".join(time_cards.keys())
         bio = BytesIO(txt.encode())
         bio.name = "全部卡密.txt"
         bot.send_document(cid, bio)
@@ -572,7 +699,7 @@ def callback_handler(call):
         safe_send_msg(cid, "📄请输入文件前缀名")
         bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, user_file[uid], m.text.strip()))
 
-    # ========== 用户余额总表（分页） ==========
+    # 用户余额总表
     elif data == "ulist":
         all_user_list = list(users.items())
         page_temp[uid] = "ulist"
@@ -590,7 +717,7 @@ def callback_handler(call):
             text += f"{uid_key} | {info['balance']:.4f}\n"
         bot.edit_message_text(text, cid, call.message.message_id, reply_markup=page_btn("ulist", page, total_page))
 
-    # ========== 所有分页路由（充值/消费/个人/余额列表） ==========
+    # 分页路由
     elif data.startswith(("rc_page_","use_page_","my_rc_","my_use_","ulist_")):
         page = int(data.split("_")[-1])
         p_type = "_".join(data.split("_")[:-1])
@@ -660,105 +787,12 @@ def callback_handler(call):
     elif data == "return_user":
         bot.edit_message_text("👤个人中心", cid, call.message.message_id, reply_markup=user_menu(uid))
 
-# ===================== 卡密、充值、扣费、文件处理函数 =====================
-def create_balance_card(m):
-    try:
-        parts = m.text.strip().split()
-        cdk = parts[0]
-        val = float(parts[1])
-        cards[cdk] = val
-        safe_send_msg(m.chat.id, f"✅余额卡密创建成功\n卡密：{cdk}\n面额：{val}")
-    except:
-        safe_send_msg(m.chat.id, "❌格式错误！示例：ABC123 10")
-
-def create_time_card(m):
-    try:
-        parts = m.text.strip().split()
-        cdk = parts[0]
-        days = int(parts[1])
-        time_cards[cdk] = days
-        safe_send_msg(m.chat.id, f"✅时长卡密创建成功\n卡密：{cdk}\n有效天数：{days}天")
-    except:
-        safe_send_msg(m.chat.id, "❌格式错误！示例：XYZ789 7")
-
-def use_cdk(m):
-    uid = m.from_user.id
-    cdk = m.text.strip()
-    cid = m.chat.id
-    if cdk in cards:
-        val = cards.pop(cdk)
-        get_user(uid)["balance"] += val
-        add_rc(uid, val)
-        safe_send_msg(cid, f"✅余额卡密兑换成功\n到账：{val}元")
-    elif cdk in time_cards:
-        days = time_cards.pop(cdk)
-        now = get_now_timestamp()
-        expire = now + days * 86400
-        get_user(uid)["vip_expire"] = expire
-        safe_send_msg(cid, f"✅时长VIP兑换成功\n有效时长：{days}天\n到期时间：{get_vip_expire_time_str(uid)}")
-    else:
-        safe_send_msg(cid, "❌卡密无效或已使用")
-
-def del_cdk(m):
-    cdk = m.text.strip()
-    if cdk in cards:
-        del cards[cdk]
-        safe_send_msg(m.chat.id, "✅余额卡密已作废")
-    elif cdk in time_cards:
-        del time_cards[cdk]
-        safe_send_msg(m.chat.id, "✅时长卡密已作废")
-    else:
-        safe_send_msg(m.chat.id, "❌未找到该卡密")
-
-def add_single_balance(m):
-    try:
-        uid, money = m.text.strip().split()
-        uid = int(uid)
-        money = float(money)
-        get_user(uid)["balance"] += money
-        add_rc(uid, money)
-        safe_send_msg(m.chat.id, f"✅成功给用户{uid}充值 {money}")
-    except:
-        safe_send_msg(m.chat.id, "❌格式错误，请按：用户ID 金额 发送")
-
-def sub_single_balance(m):
-    try:
-        uid, money = m.text.strip().split()
-        uid = int(uid)
-        money = float(money)
-        u = get_user(uid)
-        if u["balance"] >= money:
-            u["balance"] -= money
-            add_log(uid, "管理员扣余额", 0, money)
-            safe_send_msg(m.chat.id, f"✅成功扣除用户{uid}余额 {money}")
-        else:
-            safe_send_msg(m.chat.id, "❌用户余额不足")
-    except:
-        safe_send_msg(m.chat.id, "❌格式错误，请按：用户ID 金额 发送")
-
-def batch_add_user_balance(m):
-    lines = m.text.strip().splitlines()
-    succ = 0
-    fail = 0
-    for line in lines:
-        try:
-            uid, money = line.strip().split()
-            uid = int(uid)
-            money = float(money)
-            get_user(uid)["balance"] += money
-            add_rc(uid, money)
-            succ += 1
-        except:
-            fail += 1
-    safe_send_msg(m.chat.id, f"🔥批量充值完成\n成功：{succ} 条\n失败：{fail} 条")
-
-# 文件接收处理（和你截图完全一致的提示）
+# ===================== 文件接收处理 =====================
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     try:
-        # 第一步提示：正在解析文件
         safe_send_msg(cid, "📥正在解析文件，若是超大文件请耐心等待...")
         file_info = bot.get_file(msg.document.file_id)
         data = bot.download_file(file_info.file_path)
@@ -798,17 +832,17 @@ def handle_doc(msg):
             if uid in user_state:
                 del user_state[uid]
         else:
-            # 第二步提示：文件解析完成 + 分包模式按钮（和你截图一致）
             bot.send_message(cid, f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式", reply_markup=select_menu())
-    except Exception as e:
+    except Exception:
         safe_send_msg(cid, "❌文件解析失败")
 
-# 文本指令：合并完成、取消
+# 文本指令：完成、取消、/start
 @bot.message_handler(func=lambda m: True)
 def text_msg(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     txt = msg.text.strip()
+
     if txt == "完成" and user_state.get(uid) == "hebing":
         all_lines = user_merge.get(uid, [])
         total = len(all_lines)
@@ -831,6 +865,7 @@ def text_msg(msg):
             del user_merge[uid]
         if uid in user_state:
             del user_state[uid]
+
     elif txt == "取消":
         if uid in user_file:
             del user_file[uid]
@@ -839,8 +874,8 @@ def text_msg(msg):
         if uid in user_state:
             del user_state[uid]
         safe_send_msg(cid, "✅已取消当前操作")
+
     elif txt == "/start":
-        uid = msg.from_user.id
         get_user(uid)
         user_state[uid] = "idle"
         lei_detail_log.pop(uid, None)
