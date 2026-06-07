@@ -74,6 +74,22 @@ def is_vip_valid(uid):
     now = int(time.time())
     return u["vip_expire"] > now
 
+# 获取用户VIP到期时间字符串
+def get_vip_expire_time_str(uid):
+    u = get_user(uid)
+    now = int(time.time())
+    if u["vip_expire"] <= now:
+        return "已过期/未开通"
+    return datetime.fromtimestamp(u["vip_expire"], tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+
+# 获取用户剩余VIP天数
+def get_vip_days_remaining(uid):
+    u = get_user(uid)
+    now = int(time.time())
+    if u["vip_expire"] <= now:
+        return 0
+    return (u["vip_expire"] - now) // 86400
+
 # 消费日志（倒序存储）
 def add_log(uid, txt, num, cost):
     t = get_beijing_time_str()
@@ -203,19 +219,20 @@ def user_menu(uid):
     kb.add(telebot.types.InlineKeyboardButton("🔙返回主页",callback_data="back"))
     return kb
 
-# 管理员菜单：新增【🗑️清空用户余额】
+# 管理员菜单：新增【⏰扣除VIP天数】
 def admin_kb():
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
     kb.add(telebot.types.InlineKeyboardButton("➕单人加余额",callback_data="addbal"),
            telebot.types.InlineKeyboardButton("➖单人扣余额",callback_data="subbal"))
     kb.add(telebot.types.InlineKeyboardButton("🗑️清空用户余额",callback_data="clear_bal"))
+    kb.add(telebot.types.InlineKeyboardButton("⏰扣除VIP天数",callback_data="deduct_vip_days"))
     kb.add(telebot.types.InlineKeyboardButton("🎟️余额卡密",callback_data="card"),
            telebot.types.InlineKeyboardButton("⏰时间卡密",callback_data="time_card"))
     kb.add(telebot.types.InlineKeyboardButton("📊用户余额总表",callback_data="ulist"))
     kb.add(telebot.types.InlineKeyboardButton("📋全站充值记录",callback_data="rc_page_1"),
            telebot.types.InlineKeyboardButton("📋全站消费记录",callback_data="use_page_1"))
-    kb.add(telebot.types.InlineKeyboardButton("📢全站广播",callback_data="broad"),
-           telebot.types.InlineKeyboardButton("🔥批量加余额",callback_data="batch_addbal_start"))
+    kb.add(telebot.types.InlineKeyboardButton("📢全站广播",callback_data="broad"))
+    kb.add(telebot.types.InlineKeyboardButton("🔥批量加余额",callback_data="batch_addbal_start"))
     kb.add(telebot.types.InlineKeyboardButton("🎫有效余额卡密",callback_data="check_all_cdk"),
            telebot.types.InlineKeyboardButton("🗑️作废卡密",callback_data="del_cdk"))
     kb.add(telebot.types.InlineKeyboardButton("⏰有效时间卡密",callback_data="check_time_card"))
@@ -266,12 +283,15 @@ def ins_done(m):
     total_fee = fee_split + fee_insert
     u = get_user(uid)
 
+    # 余额校验提示，和你截图一致
     if not is_vip_valid(uid):
         if u['balance'] < total_fee:
-            safe_send_msg(cid, f"❌余额不足｜需要{total_fee:.4f}｜当前{u['balance']:.4f}")
+            safe_send_msg(cid, f"❌余额不足｜需要{total_fee:.4f}元｜当前{u['balance']:.4f}元")
             return
+        safe_send_msg(cid, f"✅余额校验通过，文件行数：{total}行，正在后台处理+生成插雷明细，请耐心等待...")
+    else:
+        safe_send_msg(cid, f"✅VIP用户免余额校验，文件行数：{total}行，正在后台处理+生成插雷明细，请耐心等待...")
 
-    safe_send_msg(cid, f"✅开始处理，总行数：{total}行，请耐心等待...")
     chunk = [lines[i:i+u['line']] for i in range(0, total, u['line'])]
     media = []
     file_idx = 1
@@ -307,7 +327,7 @@ def ins_done(m):
         media.append(InputMediaDocument(bio))
 
         if len(media) >= 10:
-            safe_send_msg(cid, f"📤第{batch_num}批：文件 {file_idx-9}～{file_idx}")
+            safe_send_msg(cid, f"📤正在发送第{batch_num}批｜文件 {file_idx-9}～{file_idx}")
             ok = safe_send_media_group(cid, media)
             if not ok:
                 send_all_success = False
@@ -318,7 +338,7 @@ def ins_done(m):
 
     if send_all_success and len(media) > 0:
         last_start = file_idx - len(media)
-        safe_send_msg(cid, f"📤第{batch_num}批：文件 {last_start}～{file_idx-1}")
+        safe_send_msg(cid, f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         ok = safe_send_media_group(cid, media)
         if not ok:
             send_all_success = False
@@ -326,21 +346,21 @@ def ins_done(m):
     if send_all_success:
         if not is_vip_valid(uid):
             u['balance'] -= total_fee
-            add_log(uid, f"插雷分包｜每份{info['num']}个雷", total, total_fee)
+            add_log(uid, f"插雷分包｜每份{info['num']}个雷｜雷号池{len(info['phone'])}个｜总行数{total}", total, total_fee)
         lei_detail_log[uid] = detail_lines
-        detail_txt = "📝插雷位置明细：\n" + "\n".join(detail_lines)
+        detail_txt = "📝插雷位置明细（可核对每一个雷号位置）\n" + "\n".join(detail_lines)
         if len(detail_txt) > 3800:
             bio = BytesIO(detail_txt.encode("utf-8-sig"))
-            bio.name = "插雷明细.txt"
+            bio.name = f"{file_prefix}_插雷位置明细.txt"
             bot.send_document(cid, bio)
         else:
             safe_send_msg(cid, detail_txt)
         if is_vip_valid(uid):
-            safe_send_msg(cid, f"✅插雷完成（时长VIP免费）｜共{file_idx-1}个文件")
+            safe_send_msg(cid, f"✅插雷分包全部完成（时长VIP免费）｜共{file_idx-1}个文件")
         else:
-            safe_send_msg(cid, f"✅插雷完成｜扣费{total_fee:.4f}｜剩余{u['balance']:.4f}")
+            safe_send_msg(cid, f"✅插雷分包全部完成｜扣费{total_fee:.4f}元｜剩余{u['balance']:.4f}元｜共{file_idx-1}个文件")
     else:
-        safe_send_msg(cid, "❌发送失败，本次不扣费，请稍后重试")
+        safe_send_msg(cid, "❌文件发送失败（重试3次后仍失败），本次操作**不扣费**，请稍后重试！")
 
     if uid in user_file:
         del user_file[uid]
@@ -353,12 +373,15 @@ def split_send_clean(cid, uid, txt_lines, name):
     fee = total * PRICE_SPLIT
     u = get_user(uid)
 
+    # 余额校验提示，和你截图一致
     if not is_vip_valid(uid):
         if u['balance'] < fee:
             safe_send_msg(cid, "❌余额不足")
             return
+        safe_send_msg(cid, f"✅余额校验通过，文件行数：{total}行，正在生成文件，请耐心等待...")
+    else:
+        safe_send_msg(cid, f"✅VIP用户免余额校验，文件行数：{total}行，正在生成文件，请耐心等待...")
 
-    safe_send_msg(cid, f"✅开始生成，总行数：{total}行")
     chunk = [lines[i:i+u['line']] for i in range(0, total, u['line'])]
     media = []
     file_idx = 1
@@ -379,7 +402,7 @@ def split_send_clean(cid, uid, txt_lines, name):
         media.append(InputMediaDocument(bio))
 
         if len(media) >= 10:
-            safe_send_msg(cid, f"📤第{batch_num}批：文件 {file_idx-9}～{file_idx}")
+            safe_send_msg(cid, f"📤正在发送第{batch_num}批｜文件 {file_idx-9}～{file_idx}")
             ok = safe_send_media_group(cid, media)
             if not ok:
                 send_all_success = False
@@ -390,7 +413,7 @@ def split_send_clean(cid, uid, txt_lines, name):
 
     if send_all_success and len(media) > 0:
         last_start = file_idx - len(media)
-        safe_send_msg(cid, f"📤第{batch_num}批：文件 {last_start}～{file_idx-1}")
+        safe_send_msg(cid, f"📤正在发送第{batch_num}批｜文件 {last_start}～{file_idx-1}")
         ok = safe_send_media_group(cid, media)
         if not ok:
             send_all_success = False
@@ -402,14 +425,14 @@ def split_send_clean(cid, uid, txt_lines, name):
         if is_vip_valid(uid):
             safe_send_msg(cid, f"✅纯净分包完成（时长VIP免费）｜共{file_idx-1}个文件")
         else:
-            safe_send_msg(cid, f"✅纯净分包完成｜扣费{fee:.4f}｜剩余{u['balance']:.4f}")
+            safe_send_msg(cid, f"✅纯净分包完成｜扣费{fee:.4f}元｜剩余{u['balance']:.4f}元")
     else:
-        safe_send_msg(cid, "❌发送失败，本次不扣费")
+        safe_send_msg(cid, "❌发送失败，本次**不扣费**，请重试！")
 
     if uid in user_file:
         del user_file[uid]
 
-# ===================== 新增：清空指定用户余额 流程 =====================
+# ===================== 新增：清空指定用户余额 & 扣除VIP天数 流程 =====================
 def wait_clear_balance_user(m):
     try:
         target_uid = int(m.text.strip())
@@ -419,6 +442,24 @@ def wait_clear_balance_user(m):
         safe_send_msg(m.chat.id, f"✅操作成功\n用户ID：{target_uid}\n原余额：{old_bal:.4f}\n当前余额：0.0000")
     except ValueError:
         safe_send_msg(m.chat.id, "❌请输入纯数字用户ID！")
+
+def wait_deduct_vip_days(m):
+    try:
+        parts = m.text.strip().split()
+        target_uid = int(parts[0])
+        days = int(parts[1])
+        u = get_user(target_uid)
+        now = get_now_timestamp()
+        old_days = get_vip_days_remaining(target_uid)
+        if u["vip_expire"] <= now:
+            safe_send_msg(m.chat.id, f"❌用户{target_uid}当前无有效VIP时长，无法扣除")
+            return
+        new_expire = max(now, u["vip_expire"] - days * 86400)
+        u["vip_expire"] = new_expire
+        new_days = get_vip_days_remaining(target_uid)
+        safe_send_msg(m.chat.id, f"✅操作成功\n用户ID：{target_uid}\n扣除天数：{days}天\n原剩余：{old_days}天\n新剩余：{new_days}天\n到期时间：{get_vip_expire_time_str(target_uid)}")
+    except (ValueError, IndexError):
+        safe_send_msg(m.chat.id, "❌格式错误！请按：用户ID 扣除天数 发送（例：123456 3）")
 
 # ===================== 回调事件（核心入口） =====================
 @bot.callback_query_handler(func=lambda call: True)
@@ -443,7 +484,9 @@ def callback_handler(call):
     elif data == "bal":
         u = get_user(uid)
         vip_status = "✅生效中" if is_vip_valid(uid) else "❌已过期/未开通"
-        bot.send_message(cid, f"💰当前余额：{u['balance']:.4f}\n⏰时长VIP状态：{vip_status}")
+        expire_time = get_vip_expire_time_str(uid)
+        remaining_days = get_vip_days_remaining(uid)
+        bot.send_message(cid, f"💰当前余额：{u['balance']:.4f}\n⏰VIP状态：{vip_status}\n📅到期时间：{expire_time}\n剩余时长：{remaining_days}天")
 
     elif data == "back":
         bot.edit_message_text("🏠返回主页", cid, call.message.message_id, reply_markup=menu(uid))
@@ -470,6 +513,11 @@ def callback_handler(call):
     elif data == "clear_bal":
         safe_send_msg(cid, "🗑️请输入要清空余额的【用户纯数字ID】：")
         bot.register_next_step_handler(call.message, wait_clear_balance_user)
+
+    # ========== 新增：扣除VIP天数 ==========
+    elif data == "deduct_vip_days":
+        safe_send_msg(cid, "⏰请输入要扣除VIP天数的用户ID和天数，格式：用户ID 天数（例：123456 3）")
+        bot.register_next_step_handler(call.message, wait_deduct_vip_days)
 
     elif data == "addbal":
         safe_send_msg(cid, "➕格式：用户ID 金额（一行一条）")
@@ -518,8 +566,11 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, ins_num)
 
     elif data == "noins":
-        safe_send_msg(cid, "📄请输入输出文件前缀名称")
-        bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, user_file[uid], m.text.strip()) if uid in user_file else safe_send_msg(cid, "❌请先上传文件"))
+        if uid not in user_file:
+            safe_send_msg(cid, "❌请先上传文件")
+            return
+        safe_send_msg(cid, "📄请输入文件前缀名")
+        bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, user_file[uid], m.text.strip()))
 
     # ========== 用户余额总表（分页） ==========
     elif data == "ulist":
@@ -644,7 +695,7 @@ def use_cdk(m):
         now = get_now_timestamp()
         expire = now + days * 86400
         get_user(uid)["vip_expire"] = expire
-        safe_send_msg(cid, f"✅时长VIP兑换成功\n有效时长：{days}天\n有效期内免费使用所有功能！")
+        safe_send_msg(cid, f"✅时长VIP兑换成功\n有效时长：{days}天\n到期时间：{get_vip_expire_time_str(uid)}")
     else:
         safe_send_msg(cid, "❌卡密无效或已使用")
 
@@ -701,12 +752,14 @@ def batch_add_user_balance(m):
             fail += 1
     safe_send_msg(m.chat.id, f"🔥批量充值完成\n成功：{succ} 条\n失败：{fail} 条")
 
-# 文件接收处理
+# 文件接收处理（和你截图完全一致的提示）
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     try:
+        # 第一步提示：正在解析文件
+        safe_send_msg(cid, "📥正在解析文件，若是超大文件请耐心等待...")
         file_info = bot.get_file(msg.document.file_id)
         data = bot.download_file(file_info.file_path)
         name = msg.document.file_name.lower()
@@ -745,7 +798,8 @@ def handle_doc(msg):
             if uid in user_state:
                 del user_state[uid]
         else:
-            bot.send_message(cid, "✅文件接收完成，请选择功能", reply_markup=select_menu())
+            # 第二步提示：文件解析完成 + 分包模式按钮（和你截图一致）
+            bot.send_message(cid, f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式", reply_markup=select_menu())
     except Exception as e:
         safe_send_msg(cid, "❌文件解析失败")
 
@@ -786,7 +840,16 @@ def text_msg(msg):
             del user_state[uid]
         safe_send_msg(cid, "✅已取消当前操作")
     elif txt == "/start":
-        bot.send_message(cid, "🤖 工具机器人已就绪，请选择功能", reply_markup=menu(uid))
+        uid = msg.from_user.id
+        get_user(uid)
+        user_state[uid] = "idle"
+        lei_detail_log.pop(uid, None)
+        now = get_beijing_time_str()
+        welcome_text = (
+            "🤖 大晴机器人 | 正常运行中✅\n"
+            f"⏰ 北京时间：{now}"
+        )
+        bot.send_message(cid, welcome_text, reply_markup=menu(uid))
 
 if __name__ == "__main__":
     print("🤖 机器人启动成功")
