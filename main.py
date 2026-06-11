@@ -9,7 +9,6 @@ from io import BytesIO
 import telebot
 from telebot.types import InputMediaDocument
 from datetime import datetime, timezone, timedelta
-from concurrent.futures import ThreadPoolExecutor
 from telebot.apihelper import ApiException
 
 # ===================== 读取 Railway 环境变量 =====================
@@ -25,24 +24,25 @@ BATCH_SIZE = 10
 PAGE_NUM = 20
 TG_API_DELAY = 1.2
 TG_GROUP_DELAY = 2.5
-BROAD_DELAY = 0.15      # 广播单条间隔，防风控
-BROAD_BATCH = 50        # 每50条播报一次进度
+BROAD_DELAY = 0.15
+BROAD_BATCH = 50
 MAX_WORKERS = 4
-OP_TIMEOUT = 120
+OP_TIMEOUT = 180       # 合并操作超时3分钟，超时自动作废
 CHUNK_READ_SIZE = 65536
+MERGE_MAX_CACHE = 500000  # 合并单次最大缓存行数，防止爆内存
 
 # 全局数据
 broad_text = ""
 task_queue = queue.Queue(maxsize=100)
 user_file = {}
-users = {}          # 普通用户数据：余额、格式、行数、VIP过期时间
-cards = {}          # 余额卡密
-time_cards = {}     # 时长VIP卡密
-user_merge = {}
+users = {}
+cards = {}
+time_cards = {}
+user_merge = {}  # 存储合并文件数据 {uid: {"lines":[], count:已上传文件数, start_time:开始时间}}
 user_state = {}
 user_insert = {}
-log_user = {}       # 消费日志
-log_recharge = {}   # 充值日志
+log_user = {}
+log_recharge = {}
 page_temp = {}
 lei_detail_log = {}
 temp_split_data = {}
@@ -70,13 +70,11 @@ def get_user(uid):
 def is_admin(uid):
     return uid == ADMIN_ID
 
-# 判断时长VIP是否有效
 def is_vip_valid(uid):
     u = get_user(uid)
     now = int(time.time())
     return u["vip_expire"] > now
 
-# 获取用户VIP到期时间字符串
 def get_vip_expire_time_str(uid):
     u = get_user(uid)
     now = int(time.time())
@@ -84,7 +82,6 @@ def get_vip_expire_time_str(uid):
         return "已过期/未开通"
     return datetime.fromtimestamp(u["vip_expire"], tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
 
-# 获取用户剩余VIP天数
 def get_vip_days_remaining(uid):
     u = get_user(uid)
     now = int(time.time())
@@ -92,14 +89,12 @@ def get_vip_days_remaining(uid):
         return 0
     return (u["vip_expire"] - now) // 86400
 
-# 消费日志（倒序存储）
 def add_log(uid, txt, num, cost):
     t = get_beijing_time_str()
     if uid not in log_user:
         log_user[uid] = []
     log_user[uid].insert(0, f"[{t}]｜{txt}｜{num}行｜扣费{cost:.4f}｜剩余{get_user(uid)['balance']:.4f}")
 
-# 充值日志（倒序存储）
 def add_rc(uid, money):
     t = get_beijing_time_str()
     if uid not in log_recharge:
@@ -112,7 +107,6 @@ def get_beijing_time_str():
 def get_now_timestamp():
     return int(time.time())
 
-# 清洗空白行
 def clean_lines(raw_lines):
     clean = []
     for line in raw_lines:
@@ -149,7 +143,6 @@ def dedup_phone_list_large(raw_lines):
             new_lines.append(pure)
     return new_lines, len(raw_lines), len(new_lines)
 
-# 消息发送
 def safe_send_msg(chat_id, text, retry=3):
     for i in range(retry):
         try:
@@ -180,7 +173,6 @@ def safe_send_media_group(chat_id, media_list, retry=3):
             continue
     return False
 
-# 分页按钮组件
 def page_btn(log_type, now_page, total_page):
     kb = telebot.types.InlineKeyboardMarkup(row_width=5)
     btn = []
@@ -225,7 +217,6 @@ def user_menu(uid):
     kb.add(telebot.types.InlineKeyboardButton("🔙返回主页",callback_data="back"))
     return kb
 
-# 管理员菜单：含扣除VIP天数、全站广播
 def admin_kb():
     kb = telebot.types.InlineKeyboardMarkup(row_width=2)
     kb.add(telebot.types.InlineKeyboardButton("➕单人加余额",callback_data="addbal"),
@@ -437,7 +428,7 @@ def split_send_clean(cid, uid, txt_lines, name):
     if uid in user_file:
         del user_file[uid]
 
-# ===================== 管理员功能：清空余额、扣除VIP天数、【修复版带进度广播】 =====================
+# ===================== 管理员功能 =====================
 def wait_clear_balance_user(m):
     try:
         target_uid = int(m.text.strip())
@@ -466,20 +457,17 @@ def wait_deduct_vip_days(m):
     except (ValueError, IndexError):
         safe_send_msg(m.chat.id, "❌格式错误！示例：123456 3")
 
-# 【重点修复】广播函数 + 实时进度 + 后台线程执行（不卡死机器人）
+# 后台广播带进度
 def broadcast_task(admin_cid, content):
     user_list = list(users.keys())
     total = len(user_list)
     success = 0
     fail = 0
     progress_msg = None
-
-    # 初始提示
     try:
         progress_msg = bot.send_message(admin_cid, f"📢 开始全站广播\n总用户数：{total}\n正在发送...")
     except:
         return
-
     for idx, user_id in enumerate(user_list, 1):
         try:
             time.sleep(BROAD_DELAY)
@@ -487,25 +475,19 @@ def broadcast_task(admin_cid, content):
             success += 1
         except Exception:
             fail += 1
-
-        # 每 BROAD_BATCH 条更新一次进度
         if idx % BROAD_BATCH == 0:
             percent = round(idx / total * 100, 1)
             try:
                 bot.edit_message_text(
                     f"📢 广播进行中\n进度：{idx}/{total}（{percent}%）\n成功：{success} | 失败：{fail}",
-                    admin_cid,
-                    progress_msg.message_id
+                    admin_cid, progress_msg.message_id
                 )
             except:
                 pass
-
-    # 最终结果
     try:
         bot.edit_message_text(
             f"✅ 全站广播已完成\n总用户：{total}\n发送成功：{success}\n发送失败：{fail}",
-            admin_cid,
-            progress_msg.message_id
+            admin_cid, progress_msg.message_id
         )
     except:
         safe_send_msg(admin_cid, f"✅ 全站广播已完成\n总用户：{total}\n发送成功：{success}\n发送失败：{fail}")
@@ -522,10 +504,9 @@ def do_broadcast(m):
     if len(users) == 0:
         safe_send_msg(cid, "❌暂无任何使用过机器人的用户，无需广播")
         return
-    # 后台线程运行广播，不阻塞主程序
     threading.Thread(target=broadcast_task, args=(cid, content), daemon=True).start()
 
-# ===================== 卡密、充值、扣费函数 =====================
+# ===================== 卡密充值 =====================
 def create_balance_card(m):
     try:
         parts = m.text.strip().split()
@@ -654,8 +635,14 @@ def callback_handler(call):
         bot.edit_message_text("🏠返回主页", cid, call.message.message_id, reply_markup=menu(uid))
 
     elif data == "hebing":
+        # 初始化合并记录，记录开始时间防超时
         user_state[uid] = "hebing"
-        safe_send_msg(cid, "📎请上传需要合并的 TXT/ZIP 文件")
+        user_merge[uid] = {
+            "lines": [],
+            "count": 0,
+            "start_time": get_now_timestamp()
+        }
+        safe_send_msg(cid, "📎已进入文件合并模式，请逐个上传TXT/ZIP文件\n✅每上传一个会提示序号，全部上传完成发送【完成】，随时发送【取消】终止")
 
     elif data == "quchong":
         user_state[uid] = "quchong"
@@ -671,19 +658,16 @@ def callback_handler(call):
             return
         bot.edit_message_text("🔧管理后台", cid, call.message.message_id, reply_markup=admin_kb())
 
-    # 全站广播入口
     elif data == "broad":
         if not is_admin(uid):
             return
         safe_send_msg(cid, "📢请输入要全站广播的内容（文字/表情）：")
         bot.register_next_step_handler(call.message, do_broadcast)
 
-    # 清空用户余额
     elif data == "clear_bal":
         safe_send_msg(cid, "🗑️请输入要清空余额的【用户纯数字ID】：")
         bot.register_next_step_handler(call.message, wait_clear_balance_user)
 
-    # 扣除VIP天数
     elif data == "deduct_vip_days":
         safe_send_msg(cid, "⏰格式：用户ID 天数（例：123456 3）")
         bot.register_next_step_handler(call.message, wait_deduct_vip_days)
@@ -741,7 +725,6 @@ def callback_handler(call):
         safe_send_msg(cid, "📄请输入文件前缀名")
         bot.register_next_step_handler(call.message, lambda m: split_send_clean(cid, uid, user_file[uid], m.text.strip()))
 
-    # 用户余额总表
     elif data == "ulist":
         all_user_list = list(users.items())
         page_temp[uid] = "ulist"
@@ -759,7 +742,6 @@ def callback_handler(call):
             text += f"{uid_key} | {info['balance']:.4f}\n"
         bot.edit_message_text(text, cid, call.message.message_id, reply_markup=page_btn("ulist", page, total_page))
 
-    # 分页路由
     elif data.startswith(("rc_page_","use_page_","my_rc_","my_use_","ulist_")):
         page = int(data.split("_")[-1])
         p_type = "_".join(data.split("_")[:-1])
@@ -829,11 +811,22 @@ def callback_handler(call):
     elif data == "return_user":
         bot.edit_message_text("👤个人中心", cid, call.message.message_id, reply_markup=user_menu(uid))
 
-# ===================== 文件接收处理 =====================
+# ===================== 文件接收处理（修复合并逻辑） =====================
 @bot.message_handler(content_types=['document'])
 def handle_doc(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
+    # 合并超时自动清空状态
+    if user_state.get(uid) == "hebing":
+        merge_info = user_merge.get(uid, {})
+        start_time = merge_info.get("start_time", 0)
+        if get_now_timestamp() - start_time > OP_TIMEOUT:
+            del user_state[uid]
+            if uid in user_merge:
+                del user_merge[uid]
+            safe_send_msg(cid, "⏱️合并操作超时已自动取消，请重新进入合并")
+            return
+
     try:
         safe_send_msg(cid, "📥正在解析文件，若是超大文件请耐心等待...")
         file_info = bot.get_file(msg.document.file_id)
@@ -846,13 +839,20 @@ def handle_doc(msg):
         if not lines:
             safe_send_msg(cid, "❌文件内无有效内容")
             return
-        user_file[uid] = lines
+
         state = user_state.get(uid, "")
         if state == "hebing":
-            safe_send_msg(cid, "✅文件已接收，请继续上传下一个，全部上传完毕后发送【完成】")
-            if uid not in user_merge:
-                user_merge[uid] = []
-            user_merge[uid].extend(lines)
+            # 合并：累加文件计数+总行数提示
+            merge_info = user_merge[uid]
+            merge_info["count"] += 1
+            merge_info["lines"].extend(lines)
+            total_lines = len(merge_info["lines"])
+            safe_send_msg(cid, f"✅已接收【第{merge_info['count']}个】文件\n当前汇总总行数：{total_lines}\n继续上传文件，全部完成发送【完成】")
+            # 限制最大缓存行数，防止内存爆炸
+            if len(merge_info["lines"]) > MERGE_MAX_CACHE:
+                safe_send_msg(cid, "⚠️文件行数过多，建议分批合并，避免服务卡顿")
+            return
+
         elif state == "quchong":
             total_old = len(lines)
             new_lines, _, total_new = dedup_phone_list_large(lines)
@@ -874,35 +874,75 @@ def handle_doc(msg):
             if uid in user_state:
                 del user_state[uid]
         else:
+            user_file[uid] = lines
             bot.send_message(cid, f"✅文件解析完成，总行数：{len(lines)}，请选择分包模式", reply_markup=select_menu())
-    except Exception:
-        safe_send_msg(cid, "❌文件解析失败")
+    except Exception as e:
+        safe_send_msg(cid, "❌文件解析失败，已自动重置状态")
+        if uid in user_state:
+            del user_state[uid]
 
-# 文本指令：完成、取消、/start
+# 文本指令 完成/取消/start
 @bot.message_handler(func=lambda m: True)
 def text_msg(msg):
     uid = msg.from_user.id
     cid = msg.chat.id
     txt = msg.text.strip()
 
+    # 合并完成 修复分批发送大合并文件
     if txt == "完成" and user_state.get(uid) == "hebing":
-        all_lines = user_merge.get(uid, [])
+        merge_info = user_merge.get(uid, {})
+        all_lines = merge_info.get("lines", [])
+        file_count = merge_info.get("count", 0)
         total = len(all_lines)
+        if total == 0:
+            safe_send_msg(cid, "❌没有收到任何文件，合并取消")
+            del user_state[uid]
+            if uid in user_merge:
+                del user_merge[uid]
+            return
+
         fee = total * PRICE_MERGE
         u = get_user(uid)
         if not is_vip_valid(uid) and u["balance"] < fee:
-            safe_send_msg(cid, "❌余额不足")
+            safe_send_msg(cid, f"❌余额不足｜需扣费{fee:.4f}｜当前余额{u['balance']:.4f}")
             return
-        if not is_vip_valid(uid):
-            u["balance"] -= fee
-            add_log(uid, "文件合并", total, fee)
-        bio = BytesIO("\n".join(all_lines).encode())
-        bio.name = "合并完成.txt"
-        bot.send_document(cid, bio)
-        if is_vip_valid(uid):
-            safe_send_msg(cid, f"✅合并完成（VIP免费），共{total}行")
+        safe_send_msg(cid, f"📎开始合并{file_count}个文件，总行数{total}，正在生成文件...")
+
+        # 大文件分批打包发送，不会卡死
+        send_success = True
+        media = []
+        batch_num = 1
+        file_name = "全部文件合并完成.txt"
+        # 超大行拆分多个合并文件
+        split_merge = [all_lines[i:i+50000] for i in range(0, total, 50000)]
+        for idx, line_chunk in enumerate(split_merge, 1):
+            bio = BytesIO("\n".join(line_chunk).encode())
+            bio.name = f"合并文件_{idx}.txt"
+            media.append(InputMediaDocument(bio))
+            if len(media) >= 10:
+                safe_send_msg(cid, f"📤发送合并文件 第{batch_num}批")
+                ok = safe_send_media_group(cid, media)
+                if not ok:
+                    send_success = False
+                    break
+                media = []
+                batch_num += 1
+        if send_success and media:
+            safe_send_msg(cid, f"📤发送合并文件 第{batch_num}批")
+            safe_send_media_group(cid, media)
+
+        if send_success:
+            if not is_vip_valid(uid):
+                u["balance"] -= fee
+                add_log(uid, f"文件合并｜共{file_count}个源文件", total, fee)
+            if is_vip_valid(uid):
+                safe_send_msg(cid, f"✅合并完成（VIP免费）\n合并源文件：{file_count}个\n总数据行数：{total}")
+            else:
+                safe_send_msg(cid, f"✅合并完成\n合并源文件：{file_count}个\n总数据行数：{total}\n扣费{fee:.4f}｜剩余余额：{u['balance']:.4f}")
         else:
-            safe_send_msg(cid, f"✅合并完成，共{total}行，扣费{fee:.4f}")
+            safe_send_msg(cid, "❌合并文件发送失败，本次不扣费，请重新合并")
+
+        # 清空合并状态
         if uid in user_merge:
             del user_merge[uid]
         if uid in user_state:
@@ -915,7 +955,7 @@ def text_msg(msg):
             del user_merge[uid]
         if uid in user_state:
             del user_state[uid]
-        safe_send_msg(cid, "✅已取消当前操作")
+        safe_send_msg(cid, "✅已取消当前所有操作，状态已重置")
 
     elif txt == "/start":
         get_user(uid)
